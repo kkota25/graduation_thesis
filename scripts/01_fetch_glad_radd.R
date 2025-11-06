@@ -7,17 +7,33 @@ suppressPackageStartupMessages({
   library(here); library(arrow); library(fs); library(dplyr)
 })
 
+project_renviron <- here(".Renviron")
+if (file.exists(project_renviron)) {
+  readRenviron(project_renviron)
+}
+
 # ========================= ユーザー設定（必ず確認） =========================
 # A) イベントFeatureServerのベースURL（末尾は /FeatureServer）
 #    ※「Integrated_deforestation_alerts」はタイル一覧なので使わない
-END_GLAD_BASE <- Sys.getenv("END_GLAD_BASE", unset = "")
-END_RADD_BASE <- Sys.getenv("END_RADD_BASE", unset = "")
-if (!nzchar(END_GLAD_BASE) || grepl("<org>", END_GLAD_BASE, fixed = TRUE)) {
-  stop("END_GLAD_BASE が未設定です。環境変数 END_GLAD_BASE でイベントレイヤのベースURLを指定してください。")
+get_arcgis_base <- function(env_var, dataset_label){
+  val <- Sys.getenv(env_var, unset = "")
+  if (!nzchar(val) || grepl("<org>", val, fixed = TRUE)) {
+    if (interactive()) {
+      message(sprintf("%s のイベントレイヤURLが未設定です。", dataset_label))
+      message("例: https://<org>.maps.arcgis.com/.../FeatureServer")
+      entered <- trimws(readline(prompt = sprintf("%s を入力してください（空欄で中止）: ", env_var)))
+      if (nzchar(entered)) val <- entered
+    }
+  }
+  if (!nzchar(val) || grepl("<org>", val, fixed = TRUE)) {
+    stop(sprintf("%s が未設定です。環境変数 %s または .Renviron でイベントレイヤのベースURLを指定してください。",
+                 env_var, env_var))
+  }
+  val
 }
-if (!nzchar(END_RADD_BASE) || grepl("<org>", END_RADD_BASE, fixed = TRUE)) {
-  stop("END_RADD_BASE が未設定です。環境変数 END_RADD_BASE でイベントレイヤのベースURLを指定してください。")
-}
+
+END_GLAD_BASE <- get_arcgis_base("END_GLAD_BASE", "GLAD")
+END_RADD_BASE <- get_arcgis_base("END_RADD_BASE", "RADD")
 
 # B) 統合レイヤを敢えて使う場合のフィルタ（通常は空でOK）
 GLAD_WHERE <- ""  # 例: "source = 'GLAD-S2'"
