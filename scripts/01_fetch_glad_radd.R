@@ -10,8 +10,14 @@ suppressPackageStartupMessages({
 # ========================= ユーザー設定（必ず確認） =========================
 # A) イベントFeatureServerのベースURL（末尾は /FeatureServer）
 #    ※「Integrated_deforestation_alerts」はタイル一覧なので使わない
-END_GLAD_BASE <- "https://<org>.maps.arcgis.com/arcgis/rest/services/<GLAD_events>/FeatureServer"  # ←要置換
-END_RADD_BASE <- "https://<org>.maps.arcgis.com/arcgis/rest/services/<RADD_events>/FeatureServer"  # ←要置換
+END_GLAD_BASE <- Sys.getenv("END_GLAD_BASE", unset = "")
+END_RADD_BASE <- Sys.getenv("END_RADD_BASE", unset = "")
+if (!nzchar(END_GLAD_BASE) || grepl("<org>", END_GLAD_BASE, fixed = TRUE)) {
+  stop("END_GLAD_BASE が未設定です。環境変数 END_GLAD_BASE でイベントレイヤのベースURLを指定してください。")
+}
+if (!nzchar(END_RADD_BASE) || grepl("<org>", END_RADD_BASE, fixed = TRUE)) {
+  stop("END_RADD_BASE が未設定です。環境変数 END_RADD_BASE でイベントレイヤのベースURLを指定してください。")
+}
 
 # B) 統合レイヤを敢えて使う場合のフィルタ（通常は空でOK）
 GLAD_WHERE <- ""  # 例: "source = 'GLAD-S2'"
@@ -22,7 +28,11 @@ DATE_MIN  <- "2019-01-01"
 DATE_MAX  <- "2025-12-31"
 
 # D) フィールド名の手動指定（不明なら NULL のままで自動推定に任せる）
-FIELD_DATE_MANUAL <- NULL     # 例: "event_date" / "acq_date"
+#    環境変数 FIELD_DATE_MANUAL / FIELD_DATE_FALLBACK でも指定可能
+FIELD_DATE_MANUAL <- local({
+  manual <- Sys.getenv("FIELD_DATE_MANUAL", unset = NA_character_)
+  if (is.na(manual) || manual == "") NULL else manual
+})
 FIELD_ADM2_MANUAL <- NULL     # 例: "ADM2_CODE"（属性にADM2があれば）
 FIELD_CONF_MANUAL <- NULL     # 例: "confidence"（使わないなら NULL）
 
@@ -32,13 +42,21 @@ ADM2_SHP <- here("data","raw","gaul2015_adm2","idn_adm2.shp")  # ←実体に合
 # F) 日付フィルタの適用と句
 USE_DATE_FILTER <- TRUE          # 取れない場合は FALSE にして原因切り分け
 DATE_CLAUSE     <- "AUTO"        # "AUTO" / "DATE" / "TIMESTAMP"
+AUTO_RETRY_NO_FILTER <- TRUE     # 0件時に日付フィルタを自動解除して再試行
+# ============================================================================
+
+ARCGIS_TOKEN <- Sys.getenv("ARCGIS_TOKEN", unset = "")
+add_token <- function(query_list){
+  if (!nzchar(ARCGIS_TOKEN)) return(query_list)
+  c(query_list, list(token = ARCGIS_TOKEN))
+}
 # ============================================================================
 dir_create(here("data","interim"))
 
 # ---- ユーティリティ ----
 layer_has_date <- function(layer_query_url){
   meta <- httr::content(
-    httr::GET(sub("/query$","", layer_query_url), query=list(f="json")),
+    httr::GET(sub("/query$","", layer_query_url), query=add_token(list(f="json"))),
     as="parsed", type="application/json"
   )
   if (is.null(meta$fields)) return(FALSE)
@@ -49,14 +67,23 @@ layer_has_date <- function(layer_query_url){
 pick_layer <- function(base_url){
   for (i in 0:9) {
     qurl <- sprintf("%s/%d/query", base_url, i)
+    q <- add_token(list(where="1=1", outFields="OBJECTID", returnGeometry="false",
+                        resultRecordCount=1, f="json"))
+    message(sprintf("layer %d にアクセス: %s", i, qurl))
     r <- httr::RETRY("GET", qurl,
-                     query = list(where="1=1", outFields="OBJECTID", returnGeometry="false",
-                                  resultRecordCount=1, f="json"),
+                     query = q,
                      times=3, pause_min=1, pause_cap=4, timeout(30))
-    if (httr::http_error(r)) next
+    message(sprintf("layer %d レスポンスコード: %s", i, httr::status_code(r)))
+    if (httr::http_error(r)) {
+      message(sprintf("layer %d で HTTP エラーのためスキップ: %s", i, qurl))
+      next
+    }
     m <- httr::content(r, as="parsed", type="application/json")
     if (!is.null(m$error)) {
       code <- m$error$code
+      err_msg <- if (!is.null(m$error$message)) m$error$message else ""
+      err_detail <- if (!is.null(m$error$details)) paste(m$error$details, collapse=" | ") else ""
+      message(sprintf("layer %d エラー: code=%s message=%s details=%s", i, code, err_msg, err_detail))
       if (code %in% c(498,499)) stop("トークン必須レイヤ：", base_url, "/", i)
       next
     }
@@ -73,7 +100,7 @@ pick_layer <- function(base_url){
 
 get_meta <- function(query_url){
   base <- sub("/query$", "", query_url)
-  r <- RETRY("GET", base, query=list(f="json"), times=3, pause_min=1, pause_cap=4, timeout(30))
+  r <- RETRY("GET", base, query=add_token(list(f="json")), times=3, pause_min=1, pause_cap=4, timeout(30))
   stop_for_status(r)
   content(r, as="parsed", type="application/json")
 }
@@ -85,6 +112,28 @@ guess_date_field <- function(meta, manual=NULL){
   tp <- vapply(f, `[[`, "", "type")
   cand <- nm[tp == "esriFieldTypeDate"]
   if (length(cand)) cand[1] else NULL
+}
+
+resolve_date_field <- function(meta, manual=NULL){
+  guessed <- guess_date_field(meta, manual)
+  if (!is.null(guessed)) return(guessed)
+
+  fields <- meta$fields
+  field_names <- if (is.null(fields)) character() else vapply(fields, `[[`, "", "name")
+  manual_env <- Sys.getenv("FIELD_DATE_FALLBACK", unset = "")
+  if (nzchar(manual_env)) {
+    message(sprintf("環境変数 FIELD_DATE_FALLBACK を日付列として使用します: %s", manual_env))
+    return(manual_env)
+  }
+
+  if (interactive()) {
+    message("日付フィールドを推定できませんでした。候補: ", paste(field_names, collapse=", "))
+    manual_input <- trimws(readline(prompt = "日付フィールド名を入力してください（空欄で中止）: "))
+    if (nzchar(manual_input)) return(manual_input)
+  }
+
+  stop("日付フィールドを決定できませんでした。候補: ", paste(field_names, collapse=", "),
+       "\n環境変数 FIELD_DATE_FALLBACK または FIELD_DATE_MANUAL を設定してください。")
 }
 
 build_where <- function(where_extra, date_field, query_url){
@@ -106,7 +155,7 @@ build_where <- function(where_extra, date_field, query_url){
     sprintf("%s >= TIMESTAMP '%s 00:00:00' AND %s < TIMESTAMP '%s 00:00:00'", date_field, DATE_MIN, date_field, as.character(as.Date(DATE_MAX)+1))
   )
   for (pat in try_patterns) {
-    q <- list(where = pat, outFields="OBJECTID", returnGeometry="false", resultRecordCount=1, f="json")
+    q <- add_token(list(where = pat, outFields="OBJECTID", returnGeometry="false", resultRecordCount=1, f="json"))
     r <- RETRY("GET", query_url, query=q, times=3, pause_min=1, pause_cap=4, timeout(30))
     if (!http_error(r)) {
       m <- content(r, as="parsed", type="application/json")
@@ -116,29 +165,66 @@ build_where <- function(where_extra, date_field, query_url){
   where_extra
 }
 
-fetch_all <- function(query_url, where_extra="1=1", date_field=NULL){
-  where_final <- build_where(where_extra, date_field, query_url)
-  out <- list(); off <- 0L; page <- 0L; total <- 0L
-  repeat{
-    q <- list(where=where_final, outFields="*", f="json", returnGeometry="true",
-              resultRecordCount=2000, resultOffset=off, outSR=4326)
-    r <- RETRY("GET", query_url, query=q, times=5, pause_min=1, pause_cap=8,
-               terminate_on=c(400,401,403,404), timeout(60))
-    stop_for_status(r)
-    m <- content(r, as="parsed", type="application/json")
-    if (!is.null(m$error)) stop(sprintf("ArcGISエラー %s: %s", m$error$code, m$error$message))
-    feats <- m$features; page <- page + 1L; n <- length(feats)
-    message(sprintf("GET page=%d offset=%d n=%d exceeded=%s", page, off, n, as.character(isTRUE(m$exceededTransferLimit))))
-    if (n==0) break
-    attr <- lapply(feats, `[[`, "attributes")
-    geom <- lapply(feats, `[[`, "geometry")
-    dt   <- rbindlist(lapply(seq_along(attr), function(k){ as.data.table(c(attr[[k]], geom[[k]])) }), fill=TRUE)
-    out[[length(out)+1L]] <- dt; total <- total + n
-    if (!isTRUE(m$exceededTransferLimit)) break
-    off <- off + 2000L
+fetch_all <- function(query_url, where_extra="1=1", date_field=NULL, auto_retry_no_filter=AUTO_RETRY_NO_FILTER){
+  attempt_fetch <- function(){
+    where_final <- build_where(where_extra, date_field, query_url)
+    out <- list(); off <- 0L; page <- 0L; total <- 0L
+    repeat{
+      q <- add_token(list(where=where_final, outFields="*", f="json", returnGeometry="true",
+                          resultRecordCount=2000, resultOffset=off, outSR=4326))
+      r <- RETRY("GET", query_url, query=q, times=5, pause_min=1, pause_cap=8,
+                 terminate_on=c(400,401,403,404), timeout(60))
+      stop_for_status(r)
+      m <- content(r, as="parsed", type="application/json")
+      if (!is.null(m$error)) stop(sprintf("ArcGISエラー %s: %s", m$error$code, m$error$message))
+      feats <- m$features; page <- page + 1L; n <- length(feats)
+      message(sprintf("GET page=%d offset=%d n=%d exceeded=%s", page, off, n, as.character(isTRUE(m$exceededTransferLimit))))
+      if (n==0) break
+      attr <- lapply(feats, `[[`, "attributes")
+      geom <- lapply(feats, `[[`, "geometry")
+      dt   <- rbindlist(lapply(seq_along(attr), function(k){ as.data.table(c(attr[[k]], geom[[k]])) }), fill=TRUE)
+      out[[length(out)+1L]] <- dt; total <- total + n
+      if (!isTRUE(m$exceededTransferLimit)) break
+      off <- off + 2000L
+    }
+    message(sprintf("合計取得件数: %d", total))
+    list(
+      data = if (!length(out)) data.table() else rbindlist(out, use.names=TRUE, fill=TRUE),
+      where = where_final,
+      total = total
+    )
   }
-  message(sprintf("合計取得件数: %d", total))
-  if (!length(out)) data.table() else rbindlist(out, use.names=TRUE, fill=TRUE)
+
+  res <- attempt_fetch()
+  if (!nrow(res$data) && auto_retry_no_filter && USE_DATE_FILTER) {
+    message("0件のため USE_DATE_FILTER を FALSE にして再試行します。")
+    old <- USE_DATE_FILTER
+    USE_DATE_FILTER <<- FALSE
+    on.exit({ USE_DATE_FILTER <<- old }, add = TRUE)
+    res <- attempt_fetch()
+  }
+
+  dt <- res$data
+  if (!nrow(dt)) {
+    msg <- sprintf("レイヤからデータが取得できませんでした: %s\nWHERE: %s", query_url, res$where)
+    message(msg)
+    stop(msg)
+  }
+
+  date_summary <- NA_character_
+  if (!is.null(date_field) && date_field %in% names(dt)) {
+    parsed <- parse_date_any(dt[[date_field]])
+    if (all(is.na(parsed))) {
+      date_summary <- "日付解釈不可"
+    } else {
+      date_summary <- sprintf("%s 〜 %s",
+                              format(min(parsed, na.rm=TRUE), "%Y-%m-%d"),
+                              format(max(parsed, na.rm=TRUE), "%Y-%m-%d"))
+    }
+  }
+  message(sprintf("取得サマリ: url=%s 件数=%d 日付範囲=%s",
+                  query_url, nrow(dt), ifelse(is.na(date_summary), "不明", date_summary)))
+  dt
 }
 
 parse_date_any <- function(x){
@@ -199,8 +285,10 @@ if (grepl("Integrated_deforestation_alerts", END_RADD, fixed=TRUE)) {
 
 # ---- メタから日付列候補 ----
 meta_g <- get_meta(END_GLAD); meta_r <- get_meta(END_RADD)
-FIELD_DATE_G <- guess_date_field(meta_g, FIELD_DATE_MANUAL)
-FIELD_DATE_R <- guess_date_field(meta_r, FIELD_DATE_MANUAL)
+FIELD_DATE_G <- resolve_date_field(meta_g, FIELD_DATE_MANUAL)
+FIELD_DATE_R <- resolve_date_field(meta_r, FIELD_DATE_MANUAL)
+message(sprintf("GLAD 日付フィールド: %s", FIELD_DATE_G))
+message(sprintf("RADD 日付フィールド: %s", FIELD_DATE_R))
 FIELD_ADM2_G <- FIELD_ADM2_MANUAL; FIELD_ADM2_R <- FIELD_ADM2_MANUAL
 FIELD_CONF_G <- FIELD_CONF_MANUAL; FIELD_CONF_R <- FIELD_CONF_MANUAL
 
@@ -209,18 +297,6 @@ glad <- fetch_all(END_GLAD, where_extra = if(nzchar(GLAD_WHERE)) GLAD_WHERE else
                   date_field = FIELD_DATE_G)
 radd <- fetch_all(END_RADD, where_extra = if(nzchar(RADD_WHERE)) RADD_WHERE else "1=1",
                   date_field = FIELD_DATE_R)
-
-# 空なら日付フィルタを外して再試行
-if (!nrow(glad)) { message("GLAD が空。日付条件を外して再試行。"); old <- USE_DATE_FILTER; USE_DATE_FILTER <<- FALSE
-glad <- fetch_all(END_GLAD, where_extra=if(nzchar(GLAD_WHERE)) GLAD_WHERE else "1=1", date_field=FIELD_DATE_G)
-USE_DATE_FILTER <<- old
-}
-if (!nrow(radd)) { message("RADD が空。日付条件を外して再試行。"); old <- USE_DATE_FILTER; USE_DATE_FILTER <<- FALSE
-radd <- fetch_all(END_RADD, where_extra=if(nzchar(RADD_WHERE)) RADD_WHERE else "1=1", date_field=FIELD_DATE_R)
-USE_DATE_FILTER <<- old
-}
-if (!nrow(glad)) stop("GLAD が空です（URL/where/date列を確認）")
-if (!nrow(radd)) stop("RADD が空です（URL/where/date列を確認）")
 
 # ---- 正規化 ----
 glad <- norm_alerts(glad, FIELD_DATE_G, FIELD_ADM2_G, FIELD_CONF_G)
