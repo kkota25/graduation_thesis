@@ -18,7 +18,8 @@ if (file.exists(project_renviron)) {
 get_arcgis_base <- function(env_var, dataset_label){
   val <- trimws(Sys.getenv(env_var, unset = ""))
   if (!nzchar(val) || grepl("<org>", val, fixed = TRUE)) {
-    if (interactive()) {
+    can_prompt <- interactive() && isatty(stdin())
+    if (can_prompt) {
       message(sprintf("%s のイベントレイヤURLが未設定です。", dataset_label))
       message("例: https://<org>.maps.arcgis.com/.../FeatureServer")
       entered <- trimws(readline(prompt = sprintf("%s を入力してください（空欄で中止）: ", env_var)))
