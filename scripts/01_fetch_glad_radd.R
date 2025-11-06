@@ -12,29 +12,50 @@ if (file.exists(project_renviron)) {
   readRenviron(project_renviron)
 }
 
+apply_cli_env_overrides <- function(){
+  args <- commandArgs(trailingOnly = TRUE)
+  if (!length(args)) return(invisible(NULL))
+  pattern <- "^([A-Za-z][A-Za-z0-9_]*)=(.*)$"
+  for (arg in args) {
+    m <- regexec(pattern, arg, perl = TRUE)
+    hit <- regmatches(arg, m)[[1]]
+    if (length(hit) == 3) {
+      key <- hit[2]
+      val <- trimws(hit[3])
+      if (nzchar(key)) {
+        Sys.setenv(structure(val, names = key))
+        message(sprintf("コマンドライン引数で %s を上書きしました", key))
+      }
+    }
+  }
+  invisible(NULL)
+}
+
+apply_cli_env_overrides()
+
 # ========================= ユーザー設定（必ず確認） =========================
 # A) イベントFeatureServerのベースURL（末尾は /FeatureServer）
 #    ※「Integrated_deforestation_alerts」はタイル一覧なので使わない
 get_arcgis_base <- function(env_var, dataset_label){
-  val <- trimws(Sys.getenv(env_var, unset = ""))
-  if (!nzchar(val) || grepl("<org>", val, fixed = TRUE)) {
+  base_url <- trimws(Sys.getenv(env_var, unset = ""))
+  if (!nzchar(base_url) || grepl("<org>", base_url, fixed = TRUE)) {
     can_prompt <- interactive() && isatty(stdin())
     if (can_prompt) {
       message(sprintf("%s のイベントレイヤURLが未設定です。", dataset_label))
       message("例: https://<org>.maps.arcgis.com/.../FeatureServer")
       entered <- trimws(readline(prompt = sprintf("%s を入力してください（空欄で中止）: ", env_var)))
-      if (nzchar(entered)) val <- entered
+      if (nzchar(entered)) base_url <- entered
     }
   }
-  if (!nzchar(val) || grepl("<org>", val, fixed = TRUE)) {
-    stop(sprintf("%s が未設定です。環境変数 %s または .Renviron でイベントレイヤのベースURLを指定してください。",
-                 env_var, env_var))
+  if (!nzchar(base_url) || grepl("<org>", base_url, fixed = TRUE)) {
+    stop(sprintf("%s が未設定です。環境変数 %s や .Renviron、または Rscript 実行時に %s=<URL> を指定してください。",
+                 env_var, env_var, env_var))
   }
-  if (!grepl("^https?://", val)) {
+  if (!grepl("^https?://", base_url)) {
     stop(sprintf("%s が URL として解釈できません (%s)。環境変数 %s を正しい FeatureServer ベースURLに設定してください。",
-                 env_var, val, env_var))
+                 env_var, base_url, env_var))
   }
-  val
+  base_url
 }
 
 END_GLAD_BASE <- get_arcgis_base("END_GLAD_BASE", "GLAD")
