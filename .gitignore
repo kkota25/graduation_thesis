@@ -1,0 +1,26 @@
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+# History files
+.Rhistory
+.Rapp.history
+
+# RStudio specific
+.Rproj.user/
+
+# R environment
+.RData
+
+# Mac specific
+.DS_Store
+
+# データフォルダは無視する
+data/
+
+# アウトプット（実行結果）フォルダは無視する
+outputs/
+
+# 分析用データ（大きい場合や秘密情報の場合）
+# data/
+# *.csv

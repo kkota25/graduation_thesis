@@ -1,0 +1,153 @@
+---
+title: "GraduationThesis"
+author: "Kota Yamamoto"
+date: "2025-10-19"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo=FALSE, message=FALSE, warning=FALSE, cache=TRUE)
+library(here); source(here("scripts/04_baseline_analysis.R"))
+
+# 初回だけ原データ→中間→加工を用意
+if (!file.exists(here("data/interim/alerts_year.parquet"))) run_ingest_alerts()
+if (!file.exists(here("data/processed/adm2_panel.parquet"))) build_processed()
+
+# 以後の推定で使うパネルを読み込むだけ
+p <- arrow::read_parquet(here("data/processed/adm2_panel.parquet"))
+
+```
+
+```{r }
+vars_x <- c("cloud_share","chirps_mm","viirs_ntl","ln_burn")
+diag1 <- check_fe_singularity(p, y="ln_alerts_adj", xvars=vars_x)
+diag1
+```
+
+
+```{r model}
+res <- run_baseline(p)
+etable(iv2, fitstat=~ivf+weakiv+partial_f+partial_r2)
+fixest::etable(res$model, se = "cluster", cluster = ~adm2_code)
+```
+
+
+
+#データと記述統計
+```{r 年別の警報と対数の分散でQC}
+
+tab_year <- data.frame(
+year = 2019:2025,
+alerts_sum = with(p, tapply(alerts, year, sum, na.rm=TRUE))[as.character(2019:2025)],
+ln_alerts_adj_sd = with(p, tapply(ln_alerts_adj, year, sd, na.rm=TRUE))[as.character(2019:2025)]
+)
+knitr::kable(tab_year, caption="年別の警報合計と ln(alerts/clear_share) のSD")
+```
+
+
+```{r aaa}
+# 強制再生成＋診断
+source(here::here("scripts/04_baseline_analysis.R"))
+
+diag <- list()
+
+diag$wd   <- getwd()
+diag$here <- here::here()
+diag$cols_present <- intersect(c("ln_alerts_adj","cloud_share","year"), names(res$panel))
+
+# 失敗理由を表示するために tryCatch
+ok <- tryCatch({
+  save_figures(res$panel)   # 04の関数を直接呼ぶ
+  TRUE
+}, error = function(e){
+  message("save_figures() error: ", conditionMessage(e))
+  FALSE
+})
+
+diag$ok <- ok
+diag$dir_exists <- dir.exists(here::here("outputs/figures"))
+diag$files <- list.files(here::here("outputs/figures"), full.names = TRUE)
+
+str(diag)
+
+```
+
+# ベースライン推定
+```{r ベースライン推定}
+cat("\\input{outputs/tables/baseline.tex}\n")
+```
+
+```{r 主要図}
+knitr::include_graphics(c(
+here::here("outputs/figures/scatter_clouds_alerts.png"),
+here::here("outputs/figures/hist_ln_alerts_adj.png")
+))
+```
+
+# ロバスト性
+## 3.1 サンプル制限（2019–2024）
+
+```{r サンプル制限（2019–2024）}
+library(fixest)
+sub <- subset(p, year >= 2019 & year <= 2024)
+m_1924 <- feols(ln_alerts_adj ~ chirps_mm + viirs_ntl + cloud_share | adm2_code + year, sub, se="cluster", cluster="adm2_code")
+fixest::etable(m_1924, tex=TRUE, file=here("outputs/tables/robust_2019_2024.tex"))
+cat("\\input{outputs/tables/robust_2019_2024.tex}")
+```
+
+## 3.2 外れ値トリム（上位1%）
+
+```{r 外れ値トリム（上位1%）}
+q_hi <- stats::quantile(p$ln_alerts_adj, 0.99, na.rm=TRUE)
+trim1 <- subset(p, ln_alerts_adj <= q_hi | is.na(ln_alerts_adj))
+m_trim <- feols(ln_alerts_adj ~ chirps_mm + viirs_ntl + cloud_share | adm2_code + year, trim1, se="cluster", cluster="adm2_code")
+fixest::etable(m_trim, tex=TRUE, file=here("outputs/tables/robust_trim1.tex"))
+cat("\\input{outputs/tables/robust_trim1.tex}")
+
+```
+
+## 3.3 小面積除外
+
+```{r 小面積除外}
+# 面積列が area_ha だと仮定。名称が異なる場合は差し替え。
+
+if ("area_ha" %in% names(p)) {
+big <- subset(p, area_ha >= stats::quantile(p$area_ha, 0.1, na.rm=TRUE))
+m_big <- feols(ln_alerts_adj ~ chirps_mm + viirs_ntl + cloud_share | adm2_code + year, big, se="cluster", cluster="adm2_code")
+fixest::etable(m_big, tex=TRUE, file=here("outputs/tables/robust_bigarea.tex"))
+cat("\\input{outputs/tables/robust_bigarea.tex}")
+}
+
+```
+
+## 3.4 PPML（従属変数をレベル）
+
+```{r PPML（従属変数をレベル）}
+# alerts が定数でなければPPMLも出力
+
+if (sd(p$alerts, na.rm=TRUE) > 0) {
+m_ppml <- fepois(alerts ~ chirps_mm + viirs_ntl + cloud_share | adm2_code + year, p, se="cluster", cluster="adm2_code")
+fixest::etable(m_ppml, tex=TRUE, file=here("outputs/tables/baseline_ppml.tex"))
+cat("\\input{outputs/tables/baseline_ppml.tex}")
+}
+
+```
+
+# 4. 診断と再現性
+
+```{r 診断と再現性}
+# 主要オブジェクトの存在確認
+
+stopifnot(file.exists(here("outputs/tables/baseline.tex")))
+list.files(here("outputs/tables"))
+list.files(here("outputs/figures"))
+```
+
+# 5. 付記（実験環境）
+
+```{r 付記（実験環境）}
+sessionInfo()
+
+```
