@@ -1,392 +1,175 @@
 # scripts/01_fetch_glad_radd.R
-# GLAD-S2 / RADD のイベントを ArcGIS REST から取得し、ADM2×year 件数を保存
-# 出力: data/interim/alerts_year.parquet
+# ------------------------------------------------------------
+# 目的: GFW "Integrated deforestation alerts" のタイル索引をAPIから取得し、
+#       tile_idごとのGeoTIFFをローカルに保存する
+# 参照: ArcGIS FeatureServer layer 0 (fields: tile_id, download; MaxRecordCount=2000)
+# 出力:
+#   - outputs/logs/gfw_tile_index.csv  … タイル索引ログ
+#   - outputs/tiles/gfw_tiles/*.tif    … 取得したGeoTIFF
+# 使い方（R Console または Rmdのchunkで）:
+#   library(here); source(here("scripts","01_fetch_glad_radd.R"))
+#   idx <- run_fetch_alerts()
+# ------------------------------------------------------------
 
 suppressPackageStartupMessages({
-  library(data.table); library(httr); library(jsonlite); library(sf)
-  library(here); library(arrow); library(fs); library(dplyr)
+  library(httr)
+  library(jsonlite)
+  library(fs)
+  library(readr)
+  library(dplyr)
+  library(here)
 })
 
-project_renviron <- here(".Renviron")
-if (file.exists(project_renviron)) {
-  readRenviron(project_renviron)
+# ---- 設定 ---------------------------------------------------
+.arc_base <- "https://services2.arcgis.com/g8WusZB13b9OegfU/arcgis/rest/services/Integrated_deforestation_alerts/FeatureServer/0/query"
+
+# 既定はインドネシア全域のBBOX（WGS84）
+# xmin=95, ymin=-11, xmax=141, ymax=6
+.default_bbox <- c(95, -11, 141, 6)
+
+# UA（ダウンロード安定化）
+.ua <- httr::user_agent("R/httr GFW-integrated-alerts fetcher (contact: none)")
+
+# ---- ユーティリティ -----------------------------------------
+.safe_json_get <- function(base, query, tries = 5, pause = 1){
+  for(i in seq_len(tries)){
+    resp <- try(httr::GET(url = base, query = query, .ua), silent = TRUE)
+    if(inherits(resp, "response") && httr::status_code(resp) == 200){
+      txt <- httr::content(resp, as = "text", encoding = "UTF-8")
+      return(jsonlite::fromJSON(txt, simplifyVector = TRUE))
+    }
+    Sys.sleep(pause * i)
+  }
+  stop("GET failed: ", base)
 }
 
-apply_cli_env_overrides <- function(){
-  args <- commandArgs(trailingOnly = TRUE)
-  if (!length(args)) return(invisible(NULL))
-  pattern <- "^([A-Za-z][A-Za-z0-9_]*)=(.*)$"
-  for (arg in args) {
-    m <- regexec(pattern, arg, perl = TRUE)
-    hit <- regmatches(arg, m)[[1]]
-    if (length(hit) == 3) {
-      key <- hit[2]
-      val <- trimws(hit[3])
-      if (nzchar(key)) {
-        Sys.setenv(structure(val, names = key))
-        message(sprintf("コマンドライン引数で %s を上書きしました", key))
+.dir_prep <- function(){
+  dir_create(here("outputs","logs"))
+  dir_create(here("outputs","tiles","gfw_tiles"))
+}
+
+# ---- 1) タイル索引の取得 ------------------------------------
+fetch_tile_index <- function(bbox = .default_bbox, page_size = 2000){
+  stopifnot(length(bbox) == 4)
+  off <- 0L
+  out <- list()
+  
+  repeat{
+    q <- list(
+      where          = "1=1",
+      geometry       = jsonlite::toJSON(
+        list(xmin = bbox[1], ymin = bbox[2], xmax = bbox[3], ymax = bbox[4]),
+        auto_unbox = TRUE
+      ),
+      geometryType   = "esriGeometryEnvelope",
+      inSR           = 4326,                          # WGS84 指定
+      spatialRel     = "esriSpatialRelIntersects",
+      outFields      = "tile_id,download",
+      returnGeometry = "false",
+      resultRecordCount = page_size,
+      resultOffset      = off,
+      f              = "json"
+    )
+    m <- .safe_json_get(.arc_base, q)
+    nrec <- length(m$features)
+    if(nrec == 0) break
+    
+    # attributes だけを抽出
+    df <- tibble::as_tibble(m$features$attributes) |>
+      select(tile_id, download)
+    
+    out[[length(out) + 1L]] <- df
+    off <- off + nrec
+  }
+  
+  if(length(out) == 0) {
+    tibble::tibble(tile_id = character(), download = character())
+  } else {
+    bind_rows(out) |>
+      distinct(tile_id, .keep_all = TRUE)
+  }
+}
+
+# ---- 2) タイルのダウンロード --------------------------------
+download_tiles <- function(index_df,
+                           outdir = here("outputs","tiles","gfw_tiles"),
+                           retries = 3){
+  stopifnot(all(c("tile_id","download") %in% names(index_df)))
+  dir_create(outdir)
+  
+  # 進捗バー
+  pb <- utils::txtProgressBar(min = 0, max = nrow(index_df), style = 3)
+  on.exit(close(pb), add = TRUE)
+  
+  results <- vector("list", nrow(index_df))
+  
+  for(i in seq_len(nrow(index_df))){
+    tile <- index_df$tile_id[i]
+    href <- index_df$download[i]
+    fout <- file.path(outdir, paste0(tile, ".tif"))
+    
+    ok <- FALSE
+    if(file_exists(fout) && file_info(fout)$size > 0){
+      ok <- TRUE
+    } else {
+      tries <- 0L
+      while(!ok && tries < retries){
+        tries <- tries + 1L
+        # 一時ファイルに落としてからmoveで原子更新
+        tmp <- tempfile(fileext = ".tif")
+        res <- try(httr::GET(href, .ua, write_disk(tmp, overwrite = TRUE), timeout(120)),
+                   silent = TRUE)
+        if(inherits(res, "response") && status_code(res) == 200 && file_exists(tmp) && file_info(tmp)$size > 0){
+          file_copy(tmp, fout, overwrite = TRUE)
+          ok <- TRUE
+        } else {
+          Sys.sleep(1.5 * tries)
+        }
+        if(file_exists(tmp)) file_delete(tmp)
       }
     }
+    
+    results[[i]] <- tibble::tibble(tile_id = tile,
+                                   path    = fout,
+                                   ok      = ok,
+                                   size    = ifelse(file_exists(fout), file_info(fout)$size, NA_real_))
+    utils::setTxtProgressBar(pb, i)
   }
-  invisible(NULL)
+  bind_rows(results)
 }
 
-apply_cli_env_overrides()
-
-# ========================= ユーザー設定（必ず確認） =========================
-# A) イベントFeatureServerのベースURL（末尾は /FeatureServer）
-#    ※「Integrated_deforestation_alerts」はタイル一覧なので使わない
-get_arcgis_base <- function(env_var, dataset_label){
-  base_url <- trimws(Sys.getenv(env_var, unset = ""))
-  if (!nzchar(base_url) || grepl("<org>", base_url, fixed = TRUE)) {
-    can_prompt <- interactive() && isatty(stdin())
-    if (can_prompt) {
-      message(sprintf("%s のイベントレイヤURLが未設定です。", dataset_label))
-      message("例: https://<org>.maps.arcgis.com/.../FeatureServer")
-      entered <- trimws(readline(prompt = sprintf("%s を入力してください（空欄で中止）: ", env_var)))
-      if (nzchar(entered)) base_url <- entered
-    }
-  }
-  if (!nzchar(base_url) || grepl("<org>", base_url, fixed = TRUE)) {
-    stop(sprintf("%s が未設定です。環境変数 %s や .Renviron、または Rscript 実行時に %s=<URL> を指定してください。",
-                 env_var, env_var, env_var))
-  }
-  if (!grepl("^https?://", base_url)) {
-    stop(sprintf("%s が URL として解釈できません (%s)。環境変数 %s を正しい FeatureServer ベースURLに設定してください。",
-                 env_var, base_url, env_var))
-  }
-  base_url
-}
-
-END_GLAD_BASE <- get_arcgis_base("END_GLAD_BASE", "GLAD")
-END_RADD_BASE <- get_arcgis_base("END_RADD_BASE", "RADD")
-
-# B) 統合レイヤを敢えて使う場合のフィルタ（通常は空でOK）
-GLAD_WHERE <- ""  # 例: "source = 'GLAD-S2'"
-RADD_WHERE <- ""  # 例: "source = 'RADD'"
-
-# C) 期間
-DATE_MIN  <- "2019-01-01"
-DATE_MAX  <- "2025-12-31"
-
-# D) フィールド名の手動指定（不明なら NULL のままで自動推定に任せる）
-#    環境変数 FIELD_DATE_MANUAL / FIELD_DATE_FALLBACK でも指定可能
-FIELD_DATE_MANUAL <- local({
-  manual <- Sys.getenv("FIELD_DATE_MANUAL", unset = NA_character_)
-  if (is.na(manual) || manual == "") NULL else manual
-})
-FIELD_ADM2_MANUAL <- NULL     # 例: "ADM2_CODE"（属性にADM2があれば）
-FIELD_CONF_MANUAL <- NULL     # 例: "confidence"（使わないなら NULL）
-
-# E) ADM2シェープ（属性にADM2が無い場合のみ使用）
-ADM2_SHP <- here("data","raw","gaul2015_adm2","idn_adm2.shp")  # ←実体に合わせて要置換
-
-# F) 日付フィルタの適用と句
-USE_DATE_FILTER <- TRUE          # 取れない場合は FALSE にして原因切り分け
-DATE_CLAUSE     <- "AUTO"        # "AUTO" / "DATE" / "TIMESTAMP"
-AUTO_RETRY_NO_FILTER <- TRUE     # 0件時に日付フィルタを自動解除して再試行
-# ============================================================================
-
-ARCGIS_TOKEN <- Sys.getenv("ARCGIS_TOKEN", unset = "")
-add_token <- function(query_list){
-  if (!nzchar(ARCGIS_TOKEN)) return(query_list)
-  c(query_list, list(token = ARCGIS_TOKEN))
-}
-# ============================================================================
-dir_create(here("data","interim"))
-
-# ---- ユーティリティ ----
-layer_has_date <- function(layer_query_url){
-  meta <- httr::content(
-    httr::GET(sub("/query$","", layer_query_url), query=add_token(list(f="json"))),
-    as="parsed", type="application/json"
-  )
-  if (is.null(meta$fields)) return(FALSE)
-  tp <- vapply(meta$fields, `[[`, "", "type")
-  any(tp == "esriFieldTypeDate")
-}
-
-pick_layer <- function(base_url){
-  base_url <- trimws(base_url)
-  if (!nzchar(base_url) || !grepl("^https?://", base_url)) {
-    stop("pick_layer: base_url が不正です: ", base_url,
-         "\n環境変数 END_GLAD_BASE / END_RADD_BASE が正しく設定されているか確認してください。")
-  }
-  for (i in 0:9) {
-    qurl <- sprintf("%s/%d/query", base_url, i)
-    q <- add_token(list(where="1=1", outFields="OBJECTID", returnGeometry="false",
-                        resultRecordCount=1, f="json"))
-    message(sprintf("layer %d にアクセス: %s", i, qurl))
-    r <- httr::RETRY("GET", qurl,
-                     query = q,
-                     times=3, pause_min=1, pause_cap=4, timeout(30))
-    message(sprintf("layer %d レスポンスコード: %s", i, httr::status_code(r)))
-    if (httr::http_error(r)) {
-      message(sprintf("layer %d で HTTP エラーのためスキップ: %s", i, qurl))
-      next
-    }
-    m <- httr::content(r, as="parsed", type="application/json")
-    if (!is.null(m$error)) {
-      code <- m$error$code
-      err_msg <- if (!is.null(m$error$message)) m$error$message else ""
-      err_detail <- if (!is.null(m$error$details)) paste(m$error$details, collapse=" | ") else ""
-      message(sprintf("layer %d エラー: code=%s message=%s details=%s", i, code, err_msg, err_detail))
-      if (code %in% c(498,499)) stop("トークン必須レイヤ：", base_url, "/", i)
-      next
-    }
-    if (isTRUE(layer_has_date(qurl))) {
-      message(sprintf("layer %d を採用: %s", i, qurl))
-      return(qurl)
-    }
-  }
-  stop(
-    "有効なレイヤが見つかりません: ", base_url, "\n",
-    "注意: Integrated_deforestation_alerts はタイル一覧（date無し）です。イベントレイヤを指定してください。"
-  )
-}
-
-get_meta <- function(query_url){
-  base <- sub("/query$", "", query_url)
-  r <- RETRY("GET", base, query=add_token(list(f="json")), times=3, pause_min=1, pause_cap=4, timeout(30))
-  stop_for_status(r)
-  content(r, as="parsed", type="application/json")
-}
-
-guess_date_field <- function(meta, manual=NULL){
-  if (!is.null(manual)) return(manual)
-  f <- meta$fields; if (is.null(f)) return(NULL)
-  nm <- vapply(f, `[[`, "", "name")
-  tp <- vapply(f, `[[`, "", "type")
-  cand <- nm[tp == "esriFieldTypeDate"]
-  if (length(cand)) cand[1] else NULL
-}
-
-resolve_date_field <- function(meta, manual=NULL){
-  guessed <- guess_date_field(meta, manual)
-  if (!is.null(guessed)) return(guessed)
+# ---- 3) 全体ラッパ -------------------------------------------
+run_fetch_alerts <- function(bbox = .default_bbox){
+  message("Checking service and preparing directories...")
+  .dir_prep()
   
-  fields <- meta$fields
-  field_names <- if (is.null(fields)) character() else vapply(fields, `[[`, "", "name")
-  manual_env <- Sys.getenv("FIELD_DATE_FALLBACK", unset = "")
-  if (nzchar(manual_env)) {
-    message(sprintf("環境変数 FIELD_DATE_FALLBACK を日付列として使用します: %s", manual_env))
-    return(manual_env)
+  message("Fetching tile index...")
+  idx <- fetch_tile_index(bbox = bbox, page_size = 2000)
+  
+  if(nrow(idx) == 0){
+    warning("インデックスが空です。BBOXが狭すぎる可能性があります。")
+    # それでもログは出す
+    write_csv(idx, here("outputs","logs","gfw_tile_index.csv"))
+    return(invisible(idx))
   }
   
-  if (interactive()) {
-    message("日付フィールドを推定できませんでした。候補: ", paste(field_names, collapse=", "))
-    manual_input <- trimws(readline(prompt = "日付フィールド名を入力してください（空欄で中止）: "))
-    if (nzchar(manual_input)) return(manual_input)
-  }
+  # ログ保存
+  write_csv(idx, here("outputs","logs","gfw_tile_index.csv"))
   
-  stop("日付フィールドを決定できませんでした。候補: ", paste(field_names, collapse=", "),
-       "\n環境変数 FIELD_DATE_FALLBACK または FIELD_DATE_MANUAL を設定してください。")
+  message("Downloading tiles...")
+  dl <- download_tiles(idx)
+  
+  # 結果まとめ
+  merged <- idx |>
+    left_join(dl, by = "tile_id") |>
+    mutate(path = ifelse(is.na(path), file.path(here("outputs","tiles","gfw_tiles"), paste0(tile_id, ".tif")), path))
+  
+  n_ok   <- sum(merged$ok, na.rm = TRUE)
+  n_fail <- sum(!merged$ok | is.na(merged$ok))
+  
+  message(sprintf("Done. %d downloaded / %d failed. Files at: %s",
+                  n_ok, n_fail, here("outputs","tiles","gfw_tiles")))
+  
+  invisible(merged)
 }
-
-build_where <- function(where_extra, date_field, query_url){
-  if (!USE_DATE_FILTER || is.null(date_field)) return(where_extra)
-  
-  if (DATE_CLAUSE %in% c("DATE","TIMESTAMP")) {
-    return(
-      switch(DATE_CLAUSE,
-             DATE = sprintf("(%s) AND %s >= DATE '%s' AND %s < DATE '%s'",
-                            where_extra, date_field, DATE_MIN, date_field, as.character(as.Date(DATE_MAX)+1)),
-             TIMESTAMP = sprintf("(%s) AND %s >= TIMESTAMP '%s 00:00:00' AND %s < TIMESTAMP '%s 00:00:00'",
-                                 where_extra, date_field, DATE_MIN, date_field, as.character(as.Date(DATE_MAX)+1))
-      )
-    )
-  }
-  
-  try_patterns <- list(
-    sprintf("%s >= DATE '%s' AND %s < DATE '%s'", date_field, DATE_MIN, date_field, as.character(as.Date(DATE_MAX)+1)),
-    sprintf("%s >= TIMESTAMP '%s 00:00:00' AND %s < TIMESTAMP '%s 00:00:00'", date_field, DATE_MIN, date_field, as.character(as.Date(DATE_MAX)+1))
-  )
-  for (pat in try_patterns) {
-    q <- add_token(list(where = pat, outFields="OBJECTID", returnGeometry="false", resultRecordCount=1, f="json"))
-    r <- RETRY("GET", query_url, query=q, times=3, pause_min=1, pause_cap=4, timeout(30))
-    if (!http_error(r)) {
-      m <- content(r, as="parsed", type="application/json")
-      if (!is.null(m$features)) return(sprintf("(%s) AND %s", where_extra, pat))
-    }
-  }
-  where_extra
-}
-
-fetch_all <- function(query_url, where_extra="1=1", date_field=NULL, auto_retry_no_filter=AUTO_RETRY_NO_FILTER){
-  attempt_fetch <- function(){
-    where_final <- build_where(where_extra, date_field, query_url)
-    out <- list(); off <- 0L; page <- 0L; total <- 0L
-    repeat{
-      q <- add_token(list(where=where_final, outFields="*", f="json", returnGeometry="true",
-                          resultRecordCount=2000, resultOffset=off, outSR=4326))
-      r <- RETRY("GET", query_url, query=q, times=5, pause_min=1, pause_cap=8,
-                 terminate_on=c(400,401,403,404), timeout(60))
-      stop_for_status(r)
-      m <- content(r, as="parsed", type="application/json")
-      if (!is.null(m$error)) stop(sprintf("ArcGISエラー %s: %s", m$error$code, m$error$message))
-      feats <- m$features; page <- page + 1L; n <- length(feats)
-      message(sprintf("GET page=%d offset=%d n=%d exceeded=%s", page, off, n, as.character(isTRUE(m$exceededTransferLimit))))
-      if (n==0) break
-      attr <- lapply(feats, `[[`, "attributes")
-      geom <- lapply(feats, `[[`, "geometry")
-      dt   <- rbindlist(lapply(seq_along(attr), function(k){ as.data.table(c(attr[[k]], geom[[k]])) }), fill=TRUE)
-      out[[length(out)+1L]] <- dt; total <- total + n
-      if (!isTRUE(m$exceededTransferLimit)) break
-      off <- off + 2000L
-    }
-    message(sprintf("合計取得件数: %d", total))
-    list(
-      data = if (!length(out)) data.table() else rbindlist(out, use.names=TRUE, fill=TRUE),
-      where = where_final,
-      total = total
-    )
-  }
-  
-  res <- attempt_fetch()
-  if (!nrow(res$data) && auto_retry_no_filter && USE_DATE_FILTER) {
-    message("0件のため USE_DATE_FILTER を FALSE にして再試行します。")
-    old <- USE_DATE_FILTER
-    USE_DATE_FILTER <<- FALSE
-    on.exit({ USE_DATE_FILTER <<- old }, add = TRUE)
-    res <- attempt_fetch()
-  }
-  
-  dt <- res$data
-  if (!nrow(dt)) {
-    msg <- sprintf("レイヤからデータが取得できませんでした: %s\nWHERE: %s", query_url, res$where)
-    message(msg)
-    stop(msg)
-  }
-  
-  date_summary <- NA_character_
-  if (!is.null(date_field) && date_field %in% names(dt)) {
-    parsed <- parse_date_any(dt[[date_field]])
-    if (all(is.na(parsed))) {
-      date_summary <- "日付解釈不可"
-    } else {
-      date_summary <- sprintf("%s 〜 %s",
-                              format(min(parsed, na.rm=TRUE), "%Y-%m-%d"),
-                              format(max(parsed, na.rm=TRUE), "%Y-%m-%d"))
-    }
-  }
-  message(sprintf("取得サマリ: url=%s 件数=%d 日付範囲=%s",
-                  query_url, nrow(dt), ifelse(is.na(date_summary), "不明", date_summary)))
-  dt
-}
-
-parse_date_any <- function(x){
-  if (is.numeric(x)) {
-    if (suppressWarnings(max(x, na.rm=TRUE)) > 1e12) as.POSIXct(x/1000, origin="1970-01-01", tz="UTC")
-    else as.POSIXct(x, origin="1970-01-01", tz="UTC")
-  } else {
-    as.POSIXct(substr(as.character(x),1,19), tz="UTC")
-  }
-}
-
-norm_alerts <- function(dt, field_date, field_adm2=NULL, field_conf=NULL){
-  if (!nrow(dt)) stop("ダウンロード結果が空です。")
-  setDT(dt)
-  
-  # 日付列の決定（手動指定 > 典型名 > パターン）
-  cand <- character(0)
-  if (!is.null(field_date) && field_date %in% names(dt)) cand <- field_date
-  if (!length(cand)) {
-    prefer <- c("event_date","acq_date","alert_date","first_date","detect_date","obs_date","date","timestamp","time")
-    present <- intersect(prefer, names(dt))
-    if (length(present)) cand <- present[1]
-  }
-  if (!length(cand)) {
-    any_dt <- grep("date|time", names(dt), ignore.case=TRUE, value=TRUE)
-    if (length(any_dt)) cand <- any_dt[1]
-  }
-  if (!length(cand)) stop("日付フィールドが見つかりません。列名: ", paste(names(dt), collapse=", "))
-  setnames(dt, cand, "date_raw")
-  dt[, date := as.Date(parse_date_any(date_raw))]
-  
-  # ADM2コード
-  if (!is.null(field_adm2) && field_adm2 %in% names(dt)) {
-    setnames(dt, field_adm2, "adm2_code"); dt[, adm2_code := as.character(adm2_code)]
-  } else if (!"adm2_code" %in% names(dt)) {
-    dt[, adm2_code := NA_character_]
-  }
-  
-  # 信頼度（任意）
-  if (!is.null(field_conf) && field_conf %in% names(dt)) {
-    setnames(dt, field_conf, "conf")
-    dt <- dt[is.na(conf) | conf >= 0]
-  }
-  
-  message(sprintf("採用した日付列: %s → date に正規化", cand))
-  dt[]
-}
-
-# ---- イベントレイヤ解決 ----
-END_GLAD <- pick_layer(END_GLAD_BASE)
-if (grepl("Integrated_deforestation_alerts", END_GLAD, fixed=TRUE)) {
-  stop("GLADのURLがタイル一覧です（date無し）: ", END_GLAD)
-}
-END_RADD <- pick_layer(END_RADD_BASE)
-if (grepl("Integrated_deforestation_alerts", END_RADD, fixed=TRUE)) {
-  stop("RADDのURLがタイル一覧です（date無し）: ", END_RADD)
-}
-
-# ---- メタから日付列候補 ----
-meta_g <- get_meta(END_GLAD); meta_r <- get_meta(END_RADD)
-FIELD_DATE_G <- resolve_date_field(meta_g, FIELD_DATE_MANUAL)
-FIELD_DATE_R <- resolve_date_field(meta_r, FIELD_DATE_MANUAL)
-message(sprintf("GLAD 日付フィールド: %s", FIELD_DATE_G))
-message(sprintf("RADD 日付フィールド: %s", FIELD_DATE_R))
-FIELD_ADM2_G <- FIELD_ADM2_MANUAL; FIELD_ADM2_R <- FIELD_ADM2_MANUAL
-FIELD_CONF_G <- FIELD_CONF_MANUAL; FIELD_CONF_R <- FIELD_CONF_MANUAL
-
-# ---- ダウンロード ----
-glad <- fetch_all(END_GLAD, where_extra = if(nzchar(GLAD_WHERE)) GLAD_WHERE else "1=1",
-                  date_field = FIELD_DATE_G)
-radd <- fetch_all(END_RADD, where_extra = if(nzchar(RADD_WHERE)) RADD_WHERE else "1=1",
-                  date_field = FIELD_DATE_R)
-
-# ---- 正規化 ----
-glad <- norm_alerts(glad, FIELD_DATE_G, FIELD_ADM2_G, FIELD_CONF_G)
-radd <- norm_alerts(radd, FIELD_DATE_R, FIELD_ADM2_R, FIELD_CONF_R)
-
-# ---- ADM2付与（必要時のみ空間結合）----
-need_spjoin <- any(is.na(glad$adm2_code)) || any(is.na(radd$adm2_code))
-if (need_spjoin) {
-  if (!file.exists(ADM2_SHP)) stop("ADM2シェープが見つかりません: ", ADM2_SHP)
-  adm2 <- st_read(ADM2_SHP, quiet=TRUE) |> st_make_valid() |> st_transform(4326)
-  key_nm <- intersect(names(adm2), c("ADM2_CODE","adm2_code","ADM2_PCODE"))
-  if (!length(key_nm)) stop("ADM2コード列がADM2シェープに見つかりません")
-  names(adm2)[match(key_nm[1], names(adm2))] <- "adm2_code"; adm2$adm2_code <- as.character(adm2$adm2_code)
-  
-  to_sf_pts <- function(dt){
-    if (!all(c("x","y") %in% names(dt))) stop("点座標 x,y が見つかりません。属性にADM2があるなら FIELD_ADM2_MANUAL を設定してください。")
-    st_as_sf(dt, coords=c("x","y"), crs=4326, remove=FALSE)
-  }
-  if (any(is.na(glad$adm2_code))) {
-    glad <- st_join(to_sf_pts(glad), adm2["adm2_code"], left=TRUE) |> st_drop_geometry() |> as.data.table()
-  }
-  if (any(is.na(radd$adm2_code))) {
-    radd <- st_join(to_sf_pts(radd), adm2["adm2_code"], left=TRUE) |> st_drop_geometry() |> as.data.table()
-  }
-}
-
-# ---- 年集計 → 結合 ----
-glad[, year := as.integer(format(date, "%Y"))]
-radd[, year := as.integer(format(date, "%Y"))]
-glad_y <- glad[!is.na(adm2_code) & !is.na(year), .(glad_n=.N), by=.(adm2_code, year)]
-radd_y <- radd[!is.na(adm2_code) & !is.na(year), .(radd_n=.N), by=.(adm2_code, year)]
-
-al <- merge(glad_y, radd_y, by=c("adm2_code","year"), all=TRUE)
-al[is.na(glad_n), glad_n := 0L][is.na(radd_n), radd_n := 0L][, alerts := as.integer(glad_n + radd_n)]
-al <- al[year >= as.integer(substr(DATE_MIN,1,4)) & year <= as.integer(substr(DATE_MAX,1,4))]
-setorder(al, adm2_code, year)
-
-# ---- 保存 + QC ----
-out_par <- here("data","interim","alerts_year.parquet")
-arrow::write_parquet(al[, .(adm2_code=as.character(adm2_code), year=as.integer(year), alerts=as.integer(alerts))],
-                     out_par, compression="zstd")
-message("✅ wrote: ", out_par)
-
-qc <- al[, .(n_adm2=.N, alerts_sum=sum(alerts)), by=year][order(year)]
-print(qc)
 
