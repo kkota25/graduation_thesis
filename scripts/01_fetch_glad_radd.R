@@ -16,7 +16,7 @@ if (file.exists(project_renviron)) {
 # A) イベントFeatureServerのベースURL（末尾は /FeatureServer）
 #    ※「Integrated_deforestation_alerts」はタイル一覧なので使わない
 get_arcgis_base <- function(env_var, dataset_label){
-  val <- Sys.getenv(env_var, unset = "")
+  val <- trimws(Sys.getenv(env_var, unset = ""))
   if (!nzchar(val) || grepl("<org>", val, fixed = TRUE)) {
     if (interactive()) {
       message(sprintf("%s のイベントレイヤURLが未設定です。", dataset_label))
@@ -28,6 +28,10 @@ get_arcgis_base <- function(env_var, dataset_label){
   if (!nzchar(val) || grepl("<org>", val, fixed = TRUE)) {
     stop(sprintf("%s が未設定です。環境変数 %s または .Renviron でイベントレイヤのベースURLを指定してください。",
                  env_var, env_var))
+  }
+  if (!grepl("^https?://", val)) {
+    stop(sprintf("%s が URL として解釈できません (%s)。環境変数 %s を正しい FeatureServer ベースURLに設定してください。",
+                 env_var, val, env_var))
   }
   val
 }
@@ -81,6 +85,11 @@ layer_has_date <- function(layer_query_url){
 }
 
 pick_layer <- function(base_url){
+  base_url <- trimws(base_url)
+  if (!nzchar(base_url) || !grepl("^https?://", base_url)) {
+    stop("pick_layer: base_url が不正です: ", base_url,
+         "\n環境変数 END_GLAD_BASE / END_RADD_BASE が正しく設定されているか確認してください。")
+  }
   for (i in 0:9) {
     qurl <- sprintf("%s/%d/query", base_url, i)
     q <- add_token(list(where="1=1", outFields="OBJECTID", returnGeometry="false",
