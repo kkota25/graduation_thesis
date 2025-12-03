@@ -7,45 +7,185 @@ output: html_document
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
+
+library(fixest)
+library(arrow)
+library(dplyr)
+
+reg_dt <- arrow::read_parquet("../data/processed/adm2_reg_2019_2024.parquet")
 ```
 
 # 研究の目的
 
 本研究の目的は、インドネシア ADM2 レベルで構築した Global Forest Watch の integrated deforestation alerts（以下 alerts）と、同じ地域・年の森林減少（forest loss, defor_rate）と因果関係を検証することである。
 
-本研究ではインドネシアにおけるalertsデータの妥当性と、その限界を明らかにする探索的分析である。
+本研究ではインドネシアにおけるalertsデータの妥当性と、その限界を明らかにする
 
 
 # データ構築と記述統計
-・対象：インドネシア ADM2 × 2019–2024 年
-・データソース：Google Earth Engine
-・作った変数：
-defor_rate、ln_loss、ln_alerts、cloud_share、chirps_mm、burned_ha
+- 対象：インドネシア ADM2 × 2019–2024 年
+
+- 元データソース（Google Earth Engine）
+  - integrated deforestation alerts（GFW Integrated Alerts）
+  - forest loss（Global Forest Change / GFW）
+  - 降水量（CHIRPS）
+  - 焼失面積（burned area）
+  - 雲量（Sentinel-2 Cloud Probability）
+
+## データの整形
+Google Earth engine上で ADM2×年単位に集計
+↓
+ローカルに CSV としてエクスポート
+↓
+`scripts/02_*.R` から `scripts/08_*.R` で前処理・結合
+↓
+最終的に`data/processed/adm2_reg_2019_2024.parquet`（ADM2×年のパネル）を作成
+
+##　主な変数
+
+- `defor_rate`：森林減少率（forest loss / 初期森林面積）
+- `ln_loss`：森林損失面積（loss_ha）の log1p
+- `ln_alerts`：integrated alerts 面積（ha）の log1p
+- `cloud_share`：雲天ピクセル比率（年平均）
+- `chirps_mm`：年降水量（mm）
+- `burned_ha`：焼失面積（ha）
 
 
-##主要な図
-```{r}
-knitr::include_graphics("reports/outputs/figures/map_defor_rate_2019.png")
-#など
+## データ
+```{r, echo=FALSE}
+reg_dt <- arrow::read_parquet("../data/processed/adm2_reg_2019_2024.parquet")
+head(reg_dt)
 ```
 
-#ベースライン FE-OLS の結果
 
-モデル仕様（adm2 FE, year FE, SE は adm2 クラスタ）
-defor_rate 回帰：
-  ln_alerts：係数は正だが有意でない（p≈0.13）
-  chirps_mm：負で 5% 有意 → 降水が多い地域ほど deforestation rate が低い傾向
-  burned_ha：係数・有意性ともにほぼ 0
-  
-  
-# IV（2SLS）の結果
-## first stage（ln_alerts ~ cloud_share + …）
-・cloud_share は負で 5% 有意 → 雲が多いほど alerts が減る → relevance は確認できる
-・ただし t≈2.4 ⇒ F≈5.8 と 10 未満であり、弱い IV の懸念
 
-## second stage（defor_rate ~ fit_ln_alerts + …）
-・fit_ln_alerts の係数は OLS より大きいが、有意でない（p≈0.29）
-・OLS でも IV でも、alerts と defor_rate の関係は統計的に強くはない
+## 主要な図
+
+### 森林減少率の空間分布（例：2019 年）
+```{r defor spatial distributuon, echo=FALSE, out.width="80%"}
+knitr::include_graphics("../outputs/figures/choropleth/defor/map_defor_rate_2019.png")
+```
+2019 年時点では、特にカリマンタン島とスマトラ島の一部 ADM2 で defor_rate が高く、
+ジャワ島では森林減少がほとんど観測されない。
+
+### alerts の空間分布（例：2019 年）
+```{r alerts spatial distributuon, echo=FALSE, out.width="80%"}
+knitr::include_graphics("../outputs/figures/choropleth/alerts/map_ha_alerts_2019.png")
+```
+
+### cloud_share と ln_alerts の散布図（操作変数の妥当性）
+```{r scatter clouds alerts, echo=FALSE, out.width="80%"}
+knitr::include_graphics("../outputs/figures/scatter/scatter_cloud_share_vs_ln_alerts.png")
+```
+雲量シェアが高いほど ln_alerts が低くなる負の相関が見られ、cloud_share が alerts の観測可能性に影響していることを示唆。
+(後の分析でcloud_share の t ≈ -2.4（F ≈ 5.8）で弱い操作変数とわかる)
+
+
+# 分析
+## Baseline OLS
+### Model FE OLS
+ベースラインの固定効果付き回帰式は次の通り
+$$
+defor\_rate_{it}
+= \beta_1 \ln(\text{alerts}_{it}+1)
++ \beta_2 \,chirps\_mm_{it}
++ \beta_3 \,burned\_ha_{it}
++ \alpha_i + \lambda_t + u_{it},
+$$
+
+```{r Baseline_OLS, echo=FALSE}
+ols_defor <- feols(
+  defor_rate ~ ln_alerts + chirps_mm + burned_ha |
+    adm2_code + year,
+  data    = reg_dt,
+  cluster = ~adm2_code
+)
+
+summary(ols_defor)
+```
+
+### 解釈
+- ln_alerts：0.000283（p≈0.13）
+アラート面積が増えるほど defor_rate は増える方向ですが、統計的に有意でない。
+→ 「alerts が多いほど森林減少率が高い」という関係は、はっきりとは確認できない。
+
+- chirps_mm：-0.00000220（p≈0.029）
+降水量が多い地域ほど defor_rate が有意に低い。
+→ 雨が多いと森林減少が抑えられている（または起きにくい）傾向。
+
+- burned_ha：ほぼ 0（p≈0.99）
+焼失面積は、この仕様では defor_rate とほとんど関係が見られない。
+
+
+## 2SLS first stage
+### Model
+$$
+\ln(\text{alerts}_{it} + 1)
+= \beta_1 \,cloud\_share_{it}
++ \beta_2 \,chirps\_mm_{it}
++ \beta_3 \,burned\_ha_{it}
++ \alpha_i + \lambda_t + v_{it}.
+$$
+
+```{r 2SLS first_stage, echo=FALSE}
+fs_ln_alerts <- feols(
+  ln_alerts ~ cloud_share + chirps_mm + burned_ha |
+    adm2_code + year,
+  data    = reg_dt,
+  cluster = ~adm2_code
+)
+
+summary(fs_ln_alerts)
+```
+
+### 解釈
+- ln_alerts：0.000283（p≈0.13）
+アラート面積が増えるほど defor_rate は増える方向ですが、統計的に有意でない
+→ 「alerts が多いほど森林減少率が高い」という関係は、はっきりとは確認できない
+
+- chirps_mm：-0.00000220（p≈0.029）
+降水量が多い地域ほど defor_rate が有意に低い。
+→ 雨が多いと森林減少が抑えられている（または起きにくい）傾向。
+
+- burned_ha：ほぼ 0（p≈0.99）
+焼失面積は、この仕様では defor_rate とほとんど関係が見られない。
+
+
+## 2SLS second stage
+### model
+$$
+defor\_rate_{it}
+= \beta_1 \,\widehat{\ln(\text{alerts}_{it}+1)}
++ \beta_1 \,chirps\_mm_{it}
++ \beta_1 \,burned\_ha_{it}
++ \alpha_i + \lambda_t + \varepsilon_{it}.
+$$
+
+```{r 2SLS_second_stage, echo=FALSE}
+iv_defor <- feols(
+  defor_rate ~ chirps_mm + burned_ha |   # 外生のコントロール
+    adm2_code + year |                   # 固定効果
+    ln_alerts ~ cloud_share,             # 内生 ~ IV
+  data    = reg_dt,
+  cluster = ~adm2_code
+)
+
+summary(iv_defor)
+
+```
+
+### 解釈
+- ln_alerts：0.000283（p≈0.13）
+アラート面積が増えるほど defor_rate は増える方向ですが、統計的に有意でない。
+→ 「alerts が多いほど森林減少率が高い」という関係は、はっきりとは確認できない。
+
+- chirps_mm：-0.00000220（p≈0.029）
+降水量が多い地域ほど defor_rate が有意に低い。
+→ 雨が多いと森林減少が抑えられている（または起きにくい）傾向。
+
+- burned_ha：ほぼ 0（p≈0.99）
+焼失面積は、この仕様では defor_rate とほとんど関係が見られない。
+
 
 
 # 技術的な限界と問題点
