@@ -1,133 +1,106 @@
-# scripts/07_scatterplots.R
-# ------------------------------------------------------------
-# 目的: 回帰前に主要説明変数と目的変数の散布図を自動生成
-# 入力: data/processed/adm2_panel.parquet
-# 出力:
-#   - outputs/figures/scatter/<y>_vs_<x>.png（通常とlog1pの2種）
-#   - reports/outputs/figures/scatter_all.pdf（まとめ）
-# 依存: data.table, arrow, here, ggplot2, fs
-# ------------------------------------------------------------
+# scripts/11_scatterplots.R
+library(arrow)
+library(dplyr)
+library(ggplot2)
 
-suppressPackageStartupMessages({
-  library(data.table)
-  library(arrow)
-  library(here)
-  library(ggplot2)
-  library(fs)
-})
+reg_dt <- read_parquet("data/processed/adm2_reg_2019_2024.parquet")
 
-# ---- y 候補の自動検出 ----
-.find_y <- function(DT){
-  cand <- c("defor_rate","loss_rate","loss_share",
-            "loss_ha","forest_loss_ha","treecover_loss_ha")
-  y <- intersect(cand, names(DT))
-  if (length(y)) y[[1]] else NA_character_
+# 見やすさのため，従属変数側だけ上位1%をカットしたサンプルを使う関数
+trim_top1 <- function(df, var) {
+  up <- quantile(df[[var]], 0.99, na.rm = TRUE)
+  df %>% filter(.data[[var]] <= up)
 }
 
-# ---- x 候補の抽出（存在するものだけ採用）----
-.find_xs <- function(DT){
-  groups <- list(
-    cloud   = c("cloud_share","cloud_prob","cloud"),
-    rain    = c("chirps_mm","rain_mm","precip","rain"),
-    fire    = c("ln_burn","burned_ha","burn_ha"),
-    ntl     = c("viirs_ntl","ntl"),
-    clear   = c("clear_share","forest_cover_share"),
-    firms   = c("fire_count","firms_cnt","frp")
+## ① ln_alerts vs defor_rate
+df1 <- trim_top1(reg_dt, "defor_rate")
+
+ggplot(df1, aes(x = ln_alerts, y = defor_rate)) +
+  geom_point(alpha = 0.3) +
+  geom_smooth(method = "lm", se = FALSE) +
+  labs(
+    title = "Deforestation rate vs ln_alerts",
+    x = "ln(ha_alerts + 1)",
+    y = "Deforestation rate"
   )
-  xs <- character()
-  for (g in groups) {
-    hit <- intersect(g, names(DT))
-    if (length(hit)) xs <- c(xs, hit[[1]])
-  }
-  # 数値列のみ
-  xs[vapply(xs, function(v) is.numeric(DT[[v]]), logical(1))]
-}
 
-# ---- 1枚の散布図を作成して保存。ggplotオブジェクトを返す ----
-.save_scatter <- function(DT, x, y, out_png, log1p_xy = FALSE, bins = 60){
-  # 常に data.frame に落とす（ベクトル化事故を防止）
-  pdat <- data.frame(x = DT[[x]], y = DT[[y]])
-  keep <- is.finite(pdat$x) & is.finite(pdat$y)
-  pdat <- pdat[keep, , drop = FALSE]
-  if (!nrow(pdat)) return(FALSE)
-  
-  if (log1p_xy) {
-    pdat$x <- log1p(pdat$x)
-    pdat$y <- log1p(pdat$y)
-  }
-  
-  g <- ggplot(pdat, aes(x, y)) +
-    geom_bin2d(bins = bins) +
-    geom_smooth(method = "lm", se = FALSE, linewidth = 0.6) +
-    labs(
-      title = sprintf("%s vs %s%s", y, x, if (log1p_xy) " (log1p)" else ""),
-      x = x, y = y
-    ) +
-    theme_minimal(base_size = 12) +
-    theme(panel.grid.minor = element_blank())
-  
-  ggsave(out_png, g, width = 8.5, height = 6.0, dpi = 150)
-  g
-}
+## ② ln_alerts vs ln_loss
+df2 <- trim_top1(reg_dt, "ln_loss")
 
-# ---- メイン ----
-run_scatterplots <- function(panel_path,
-                             y_var     = NULL,
-                             out_dir   = here("outputs","figures","scatter"),
-                             make_pdf  = TRUE,
-                             pdf_path  = here("reports","outputs","figures","scatter_all.pdf"),
-                             bins      = 60){
+ggplot(df2, aes(x = ln_alerts, y = ln_loss)) +
+  geom_point(alpha = 0.3) +
+  geom_smooth(method = "lm", se = FALSE) +
+  labs(
+    title = "ln_loss vs ln_alerts",
+    x = "ln(ha_alerts + 1)",
+    y = "ln(loss_ha + 1)"
+  )
+
+## ③ cloud_share vs ln_alerts（第1段階）
+ggplot(reg_dt, aes(x = cloud_share, y = ln_alerts)) +
+  geom_point(alpha = 0.3) +
+  geom_smooth(method = "lm", se = FALSE) +
+  labs(
+    title = "ln_alerts vs cloud_share (first stage)",
+    x = "Cloud share",
+    y = "ln(ha_alerts + 1)"
+  )
+
+## ④ cloud_share vs defor_rate（reduced form 1）
+df4 <- trim_top1(reg_dt, "defor_rate")
+
+ggplot(df4, aes(x = cloud_share, y = defor_rate)) +
+  geom_point(alpha = 0.3) +
+  geom_smooth(method = "lm", se = FALSE) +
+  labs(
+    title = "Deforestation rate vs cloud_share (reduced form)",
+    x = "Cloud share",
+    y = "Deforestation rate"
+  )
+
+## ⑤ cloud_share vs ln_loss（reduced form 2）
+df5 <- trim_top1(reg_dt, "ln_loss")
+
+ggplot(df5, aes(x = cloud_share, y = ln_loss)) +
+  geom_point(alpha = 0.3) +
+  geom_smooth(method = "lm", se = FALSE) +
+  labs(
+    title = "ln_loss vs cloud_share (reduced form)",
+    x = "Cloud share",
+    y = "ln(loss_ha + 1)"
+  )
+
+## ⑥ cloud_share vs chirps_mm（IV とコントロールの関係）
+ggplot(reg_dt, aes(x = cloud_share, y = chirps_mm)) +
+  geom_point(alpha = 0.3) +
+  geom_smooth(method = "lm", se = FALSE) +
+  labs(
+    title = "chirps_mm vs cloud_share",
+    x = "Cloud share",
+    y = "CHIRPS rainfall (mm)"
+  )
+
+
+
+#1. **ln_alerts vs defor_rate**
   
-  if (!file.exists(panel_path)) stop("パネルファイルが見つかりません: ", panel_path)
-  fs::dir_create(out_dir, recurse = TRUE)
-  fs::dir_create(fs::path_dir(pdf_path), recurse = TRUE)
+#  * 目的：処置変数（アラート）と主要アウトカム（森林減少率）の生の関係を可視化し、アラート増加と減少率の関係の方向・強さを直感的に確認する。
+
+#2. **ln_alerts vs ln_loss**
   
-  DT <- as.data.table(arrow::read_parquet(panel_path))
+#  * 目的：もう一つのアウトカム（森林減少面積の対数）との関係を確認し、処置の影響が別定義のアウトカムでも一貫していそうかを見る。
+
+#3. **cloud_share vs ln_alerts（第1段階）**
   
-  # y の決定
-  y_auto <- .find_y(DT)
-  y <- if (is.null(y_var)) y_auto else y_var
-  if (!length(y) || is.na(y) || !y %in% names(DT))
-    stop("目的変数 y が見つかりません。候補例: defor_rate, loss_rate, loss_share, loss_ha, forest_loss_ha, treecover_loss_ha")
+#  * 目的：IV（cloud_share）が処置変数 ln_alerts をどの程度強く説明しているか（第1段階の強さと符号）を視覚的に確認する。
+
+#4. **cloud_share vs defor_rate（reduced form 1）**
   
-  # x 候補
-  xs <- .find_xs(DT)
-  if (!length(xs)) stop("散布図の説明変数候補が見つかりません。")
+#  * 目的：IV がアウトカム defor_rate に与える総合的な効果（reduced form）の符号・形を確認し、2SLS の推定結果と整合的かを見る。
+
+#5. **cloud_share vs ln_loss（reduced form 2）**
   
-  # PDF まとめ開始
-  if (isTRUE(make_pdf)) {
-    grDevices::pdf(pdf_path, width = 8.5, height = 6.0, onefile = TRUE, paper = "special")
-    on.exit(try(grDevices::dev.off(), silent = TRUE), add = TRUE)
-  }
+#  * 目的：別アウトカム ln_loss に対する reduced form を確認し、IV→アウトカムの関係が定義を変えても似た方向性かをチェックする。
+
+#6. **cloud_share vs chirps_mm（IV とコントロール）**
   
-  # 各 x と y のペアで通常版と log1p 版を出力
-  for (x in xs) {
-    # 通常スケール
-    fn_png1 <- file.path(out_dir, sprintf("%s_vs_%s.png", y, x))
-    g1 <- .save_scatter(DT, x, y, fn_png1, log1p_xy = FALSE, bins = bins)
-    if (isTRUE(make_pdf) && !identical(g1, FALSE)) print(g1)
-    
-    # log1p スケール
-    fn_png2 <- file.path(out_dir, sprintf("%s_vs_%s_log.png", y, x))
-    g2 <- .save_scatter(DT, x, y, fn_png2, log1p_xy = TRUE, bins = bins)
-    if (isTRUE(make_pdf) && !identical(g2, FALSE)) print(g2)
-    
-    message(sprintf("[OK] %s ~ %s -> %s / %s", y, x, fn_png1, fn_png2))
-  }
-  
-  # 参考: IV 第一段階（alerts ~ cloud_share）
-  if ("alerts" %in% names(DT)) {
-    iv_x <- intersect(c("cloud_share","cloud_prob","cloud"), names(DT))
-    if (length(iv_x)) {
-      x <- iv_x[[1]]
-      fn <- file.path(out_dir, sprintf("alerts_vs_%s_log.png", x))
-      g_iv <- .save_scatter(DT, x, "alerts", fn, log1p_xy = TRUE, bins = bins)
-      if (isTRUE(make_pdf) && !identical(g_iv, FALSE)) print(g_iv)
-      message(sprintf("[OK] alerts ~ %s (第一段階確認) -> %s", x, fn))
-    }
-  }
-  
-  invisible(list(y_used = y, x_used = xs,
-                 out_dir = out_dir,
-                 pdf_path = if (isTRUE(make_pdf)) pdf_path else NA_character_))
-}
+#  * 目的：IV が主要コントロール（降水量）とどの程度相関しているかを確認し、「IV が観測可能な環境要因と強く結びつきすぎていないか」（外生性の直感チェック）を見る。
