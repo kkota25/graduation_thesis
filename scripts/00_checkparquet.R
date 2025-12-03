@@ -15,6 +15,22 @@ names(df_forestloss)
 names(df_viirs)
 names(hotspot)
 
+##################### adm2_reg_2019_2024.parquet #####################
+df <- arrow::read_parquet(
+  here("data", "processed", "adm2_reg_2019_2024.parquet")
+)
+
+# 構造だけサッと見る
+dplyr::glimpse(df)
+
+# 先頭だけ見る
+head(df, 5)
+
+# RStudio で表形式で見たいとき
+View(df)
+
+summary(df)
+
 
 ##################### adm2_panel.parquet #####################
 df_panel <- arrow::read_parquet(
