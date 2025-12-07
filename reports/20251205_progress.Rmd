@@ -1,5 +1,5 @@
 ---
-title: "進捗"
+title: "卒論進捗まとめ（2025-12-05）"
 author: "Kota Yamamoto"
 date: "`r Sys.Date()`"
 output:
@@ -50,14 +50,6 @@ reg_dyn <- reg_dt %>%
     !is.na(defor_rate_l1),
     !is.na(ln_alerts_l1),
     !is.na(cloud_share_l1)
-  )
-```
-
-```{r dyn_data_nz, echo=FALSE}
-reg_dyn_nz <- reg_dyn %>%
-  dplyr::filter(
-    !is.na(ln_alerts),  # 欠損を除外（不要ならこの行は削ってOK）
-    ln_alerts != 0      # ln_alerts が 0 の行を除外
   )
 ```
 
@@ -400,6 +392,7 @@ summary(iv_defor_l1)
 
 ## ダイナミック・パネル 2SLS
 
+
 第一段階（first stage）：
 
 $$
@@ -449,26 +442,6 @@ summary(dyn_iv, stage = 2)
 ```
 
 
-## ダイナミック・パネル 2SLS (ln(alerts+1)=0を除外)
-アラートが発令されてない場所は森林じゃない？→除外
-
-```{r dyn_2sls first, echo=FALSE}
-dyn_iv <- feols(
-  defor_rate ~ defor_rate_l1 + chirps_mm + burned_ha |
-    adm2_code + year |
-    ln_alerts_l1 ~ cloud_share_l1,
-  data    = reg_dyn_nz,
-  cluster = ~adm2_code
-)
-
-# first stage
-summary(dyn_iv, stage = 1)
-```
-
-```{r dyn_2sls second, echo=FALSE}
-# second stage
-summary(dyn_iv, stage = 2)
-```
 
 # 技術的な限界
 ## データの限界
@@ -512,3 +485,8 @@ first stage が強くなる可能性がある（雲の短期ショックが効�
 - Burned area, Forest lossは月次で取得済み
 - AlertsはGEEのメモリ不足で取得が難しい
 - Cloudsのデータセットが年次なので、月次の取得がむずかしい
+
+
+
+
+

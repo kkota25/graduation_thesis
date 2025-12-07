@@ -1,0 +1,4 @@
+﻿ファイル構成txtファイル出力
+
+cd ~/Desktop/graduation_thesis
+ls -R > graduation_thesis.txt
