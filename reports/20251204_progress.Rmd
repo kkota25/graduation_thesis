@@ -431,6 +431,8 @@ summary(dyn_iv, stage = 2)
 
 - Google Earth Engineでは思いデータを出力するのに時間がかかる(時間的制約)
 
+- Alertsのデータは1000mメッシュで取得（当初は10m）
+
 
 # 今後の改善案
 ## ラグの導入
