@@ -1,4 +1,4 @@
-# scripts/07_build_processed.R
+# scripts/08_build_processed.R
 # ADM2 × year のパネルデータ（alerts + chirps + clouds + burned + forest loss）
 # を作成して data/processed/adm2_panel.parquet に書き出す
 
@@ -29,6 +29,16 @@ build_adm2_panel <- function(
   clouds <- arrow::read_parquet(file.path(input_dir, "clouds_year.parquet"))
   floss  <- arrow::read_parquet(file.path(input_dir, "forestloss_year.parquet"))
   
+  lc_modis <- lc_modis |>
+    filter(dplyr::between(year, year_min, year_max)) |>
+    # panel 側と重複しそうな列は落としておく（ADM 名称など）
+    select(
+      -`system:index`,
+      -.geo,
+      -adm1_name,
+      -adm2_name
+    )
+  
   # ---------- 2. 年の範囲でフィルタ ----------
   alerts <- alerts |> filter(dplyr::between(year, year_min, year_max))
   chirps <- chirps |> filter(dplyr::between(year, year_min, year_max))
@@ -57,6 +67,11 @@ build_adm2_panel <- function(
     # 森林減少
     left_join(
       floss |> select(adm2_code, year, defor_rate, forest2000_ha, loss_ha),
+      by = c("adm2_code", "year")
+    ) |>
+    # MODIS 土地被覆（ha_* / share_* / total_ha など全て）
+    left_join(
+      lc_modis,
       by = c("adm2_code", "year")
     ) |>
     arrange(adm2_code, year)
