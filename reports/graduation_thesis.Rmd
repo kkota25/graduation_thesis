@@ -21,6 +21,8 @@ header-includes:
   - ダイナミックパネル分析 × 2SLS (ラグ有り)
 - 問題点
 
+- 分析を熱帯雨林の伐採が主に行われている自治体に絞る
+
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
@@ -33,9 +35,6 @@ reg_dt <- arrow::read_parquet("../data/processed/adm2_reg_2019_2024.parquet")
 ```
 
 ```{r dyn_data, echo=FALSE}
-library(dplyr)
-library(fixest)
-
 # adm2×year で並べてラグを作成
 reg_dyn <- reg_dt %>%
   arrange(adm2_code, year) %>%
@@ -145,7 +144,8 @@ reg_dt <- arrow::read_parquet("../data/processed/adm2_reg_2019_2024.parquet")
 knitr::include_graphics("../reports/20251205_dataview.png")
 ```
 
-
+Burgess et al. (2012)は、分析対象をインドネシア全土ではなく、
+「main forest islands」= Sumatra, Kalimantan, Sulawesi, Papua に限定している。Java, Bali, NTB/NTT, Maluku, Riau Islands などは「baseline 期に森林被覆がごくわずか（negligible forest cover）」とし、サンプルから除外している。
 
 ## 記述統計量
 ```{r data summary, echo=FALSE}
@@ -512,3 +512,33 @@ first stage が強くなる可能性がある（雲の短期ショックが効�
 - Burned area, Forest lossは月次で取得済み
 - AlertsはGEEのメモリ不足で取得が難しい
 - Cloudsのデータセットが年次なので、月次の取得がむずかしい
+
+
+# 自治体の選定
+- ステップ1：
+「main forest islands」に近い島（例：Sumatra, Kalimantan, Sulawesi, Papua）に限定。
+- ステップ2：
+forest2000_ha / total_ha が 2–5% 未満の ADM2 を落とす（Assunção の 2％ルールの district 版）。
+- ステップ3：
+2019–2024 の loss_ha や defor_rate がずっとゼロに近い ADM2 を除外（前線ではない地域を削る）。
+- ステップ4（ロバストネス）：
+forest2000_ha / total_ha が中央値以上の ADM2 だけのサンプルでも再推定。
+とすると、Assunção と Burgessのサンプル構築思想をかなり忠実に踏まえた「森林のある自治体サンプル」になります。
+
+
+Burgess et al. (2012) says “We focus our analysis on the main forest islands of Indonesia: moving from west to east, these are Sumatra, Kalimantan, Sulawesi and Papua. The remaining islands (Java, Bali, NTB/NTT, Maluku, and the Riau Islands near Singapore), shown in white, have negligible forest cover in our satellite data.”
+
+```{r dyn_2sls second, echo=FALSE}
+# 1. ADM2 ごとに 1 行にする ---------------------------------------
+# forest2000_ha と total_ha は年で変わらないので、
+# 各 adm2_code について最初の年の行だけを使う
+df_adm2 <- df %>%
+  arrange(adm2_code, year) %>%
+  group_by(adm2_code) %>%
+  slice(1) %>%
+  ungroup()
+```
+
+
+
+

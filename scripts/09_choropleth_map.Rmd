@@ -200,6 +200,120 @@ p_defor_2019 <- plot_save_map(
 p_defor_2019
 ```
 
+
+```{r share_evergreen_broadleaf 2019, include=FALSE}
+# --------------------------------------------------
+# 熱帯雨林指標（share_evergreen_broadleaf）の階級区分図
+df <- read_parquet("../data/processed/adm2_reg_2019_2024.parquet")
+
+# 1. ADM2 境界の読み込み -----------------------------------------
+
+
+adm2_sf <- st_read("../data/raw/IDN_adm2_gaul2015/IDN_adm2_gaul2015.shp") %>%
+  mutate(adm2_code = as.integer(ADM2_CODE))
+
+
+# 2. 対象年を指定して df を絞る -----------------------------------
+year_target <- 2019  # 必要に応じて 2020〜2024 に変更
+
+df_year <- df %>%
+  dplyr::filter(year == year_target) %>%
+  dplyr::select(
+    adm2_code,
+    share_evergreen_broadleaf,
+    forest2000_ha,
+    total_ha
+  ) %>%
+  # 必要なら 2000 年森林率も作っておく（後で抽出条件に使える）
+  dplyr::mutate(
+    share_forest2000 = forest2000_ha / total_ha
+  )
+
+# 3. sf にマージ ---------------------------------------------------
+map_dat <- adm2_sf %>%
+  dplyr::left_join(df_year, by = "adm2_code")
+
+# 4. 熱帯雨林「あり」にしたい ADM2 の条件（任意） ----------------
+#   - ここでは一例として:
+#     * forest2000_ha >= 25000
+#     * share_evergreen_broadleaf >= 0.30
+#   - 抽出用フラグだけ付けておき、マップでは全 ADM2 を描画しつつ、
+#     fill の階級は share_evergreen_broadleaf で作る
+
+map_dat <- map_dat %>%
+  dplyr::mutate(
+    is_tropical = forest2000_ha >= 25000 &
+                  share_evergreen_broadleaf >= 0.30
+  )
+
+# 5. share_evergreen_broadleaf の階級（分位数）を作成 ------------
+# NA を除いてクラス分け
+n_class <- 5
+
+brks <- classInt::classIntervals(
+  stats::na.omit(map_dat$share_evergreen_broadleaf),
+  n = n_class,
+  style = "quantile"
+)$brks
+
+map_dat <- map_dat %>%
+  dplyr::mutate(
+    evergreen_cls = cut(
+      share_evergreen_broadleaf,
+      breaks = brks,
+      include.lowest = TRUE,
+      dig.lab = 3
+    )
+  )
+
+# 6. 図を描く（Console からそのまま描画） --------------------------
+p_evergreen <- ggplot(map_dat) +
+  geom_sf(
+    aes(fill = evergreen_cls),
+    linewidth = 0.1,
+    color = "grey30"
+  ) +
+  # 熱帯雨林ありの ADM2 を境界で強調表示（任意）
+  geom_sf(
+    data = dplyr::filter(map_dat, is_tropical),
+    fill = NA,
+    color = "red",
+    linewidth = 0.4
+  ) +
+  scale_fill_viridis_d(
+    option = "C",  # 好きな palette に変更可
+    na.value = "grey90",
+    name = "Evergreen\nbroadleaf share"
+  ) +
+  labs(
+    title = paste0("Share of evergreen broadleaf forest (ADM2, ", year_target, ")"),
+    subtitle = "Red outline: tropical rainforest sample (forest2000_ha >= 25,000 & share_evergreen_broadleaf >= 0.30)"
+  ) +
+  theme_minimal()
+
+
+# 画面に表示
+p_evergreen
+
+# 7. 画像として保存 -----------------------------------------------
+# 出力先フォルダは必要に応じて変更してください
+# 例: outputs/figures 配下に PNG で保存
+ggplot2::ggsave(
+  filename = paste0("../outputs/figures/choropleth/map_evergreen_share_", year_target, ".png"),
+  plot     = p_evergreen,
+  width    = 8,    # 幅（インチ）
+  height   = 6,    # 高さ（インチ）
+  dpi      = 300
+)
+
+```
+
+
+
+
+
+
+
 #2020-2024
 ```{r plot 2020 to 2024, include=FALSE}
 years_vec <- 2020:2024
