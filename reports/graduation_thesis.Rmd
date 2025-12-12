@@ -525,19 +525,477 @@ forest2000_ha / total_ha が 2–5% 未満の ADM2 を落とす（Assunção の
 forest2000_ha / total_ha が中央値以上の ADM2 だけのサンプルでも再推定。
 とすると、Assunção と Burgessのサンプル構築思想をかなり忠実に踏まえた「森林のある自治体サンプル」になります。
 
+## ステップ1
 
 Burgess et al. (2012) says “We focus our analysis on the main forest islands of Indonesia: moving from west to east, these are Sumatra, Kalimantan, Sulawesi and Papua. The remaining islands (Java, Bali, NTB/NTT, Maluku, and the Riau Islands near Singapore), shown in white, have negligible forest cover in our satellite data.”
 
-```{r dyn_2sls second, echo=FALSE}
-# 1. ADM2 ごとに 1 行にする ---------------------------------------
-# forest2000_ha と total_ha は年で変わらないので、
-# 各 adm2_code について最初の年の行だけを使う
-df_adm2 <- df %>%
-  arrange(adm2_code, year) %>%
-  group_by(adm2_code) %>%
-  slice(1) %>%
-  ungroup()
+```{r extract islands, echo=FALSE}
+# --------------------------------------------------
+# Burgess (2012) に倣って main forest islands のみ残す
+#   - 入力: reg_dyn（summary(reg_dyn) のデータフレーム）
+#   - 出力:
+#       * drop_adm1: 落とす州
+#       * keep_adm1: 残す州
+#       * reg_dyn_main_islands: main forest islands のみのデータ
+# --------------------------------------------------
+
+
+# 1. 落とすべき adm1_name（Java, Bali, Nusa Tenggara, Maluku, Riau Islands）
+drop_adm1 <- c(
+  # Java 地方
+  "Banten",
+  "Dki Jakarta",
+  "Jawa Barat",
+  "Jawa Tengah",
+  "Jawa Timur",
+  "Daerah Istimewa Yogyakarta",
+  
+  # Bali + Nusa Tenggara（Lesser Sunda）
+  "Bali",
+  "Nusatenggara Barat",
+  "Nusatenggara Timur",
+  
+  # Maluku
+  "Maluku",
+  "Maluku Utara",
+  
+  # Riau Islands（本土 Riau とは別）
+  "Kepulauan-riau"
+)
+
+# 2. 実際に残る adm1_name を確認
+keep_adm1 <- sort(setdiff(unique(reg_dyn$adm1_name), drop_adm1))
+
+keep_adm1
+# 想定される出力:
+# [1] "Bangka Belitung"           
+# [2] "Bengkulu"                  
+# [3] "Gorontalo"                 
+# [4] "Jambi"                     
+# [5] "Kalimantan Barat"          
+# [6] "Kalimantan Selatan"        
+# [7] "Kalimantan Tengah"         
+# [8] "Kalimantan Timur"          
+# [9] "Lampung"                   
+# [10] "Nangroe Aceh Darussalam"   
+# [11] "Papua"                     
+# [12] "Papua Barat"               
+# [13] "Riau"                      
+# [14] "Sulawesi Barat"            
+# [15] "Sulawesi Selatan"          
+# [16] "Sulawesi Tengah"           
+# [17] "Sulawesi Tenggara"         
+# [18] "Sulawesi Utara"            
+# [19] "Sumatera Barat"            
+# [20] "Sumatera Selatan"          
+# [21] "Sumatera Utara"            
+
+# ※ Bangka Belitung は Sumatra 本土ではない島嶼州なので、
+#   落としたい場合は drop_adm1 に "Bangka Belitung" を追加して、
+#   上の 2 行をもう一度実行してください。
+
+# 3. main forest islands のみを残したデータを作成
+reg_dyn_main_islands <- reg_dyn %>%
+  filter(!adm1_name %in% drop_adm1)
+
+# チェック用：州ごとの観測数を確認
+reg_dyn_main_islands %>%
+  count(adm1_name, sort = TRUE)
 ```
+
+## ステップ2
+
+--------------------------------------------------
+Step 2: forest2000_ha / total_ha が 2–5% 未満の ADM2 を落とす
+   データ: reg_dyn_main_islands
+   - share_forest2000 を作る
+   - 閾値 2% と 5% でフィルタしたデータを作成
+--------------------------------------------------
+ 
+```{r generate forest rate in 2000}
+# 1. 2000年森林率（forest2000_ha / total_ha）を作成 ----------------
+reg_dyn_main_islands <- reg_dyn_main_islands %>%
+  mutate(
+    share_forest2000 = forest2000_ha / total_ha
+  )
+
+# summary(reg_dyn_main_islands$share_forest2000)
+```
+
+```{r extract municipalities with 2% or more}
+# 2. 閾値 2%（0.02）未満の ADM2 を落とす ----------------------------
+#   - 「森林率が 2% 以上」の ADM2 だけ残す
+reg_dyn_forest02 <- reg_dyn_main_islands %>%
+  filter(share_forest2000 >= 0.02)
+
+# チェック：州ごとの観測数
+#reg_dyn_forest02 %>%
+#  count(adm1_name, sort = TRUE)
+```
+
+```{r extract municipalities with 5% or more}
+# 2. 閾値 2%（0.02）未満の ADM2 を落とす ----------------------------
+#   - 「森林率が 2% 以上」の ADM2 だけ残す
+# reg_dyn_forest02 <- reg_dyn_main_islands %>%
+#   filter(share_forest2000 >= 0.02)
+
+# チェック：州ごとの観測数
+#reg_dyn_forest02 %>%
+#  count(adm1_name, sort = TRUE)
+```
+
+## ステップ3
+2019–2024（あなたのケース）で deforestation がほぼゼロの ADM2 は、
+政策の影響を検出する“フロンティア”とは言い難いので、サンプルから外す
+
+ADM2 ごとに
+「loss_ha（森林喪失面積）の平均／最大値」
+「defor_rate の平均／最大値」
+などを集計し、「常にゼロに近い」ADM2 を除外
+
+```{r frontier des stats}
+# --------------------------------------------------
+# Step 3: 2019–2024 の loss_ha / defor_rate が「ほぼゼロ」の ADM2 を除外
+#   - 入力: reg_dyn_forest02
+#   - 出力:
+#       * dyn_frontier_stats : ADM2 ごとの要約
+#       * reg_dyn_frontier_loose : 緩めのフロンティア定義
+#       * reg_dyn_frontier_strict: 厳しめのフロンティア定義（ロバストネス）
+# --------------------------------------------------
+
+
+# 0. 念のため、対象期間を明示（reg_dyn は既に 2020–2024 のはずだが）
+reg_dyn_forest02 <- reg_dyn_forest02 %>%
+  filter(year >= 2019, year <= 2024)
+
+# 1. ADM2 ごとに deforestation の要約統計を計算 --------------------
+dyn_frontier_stats <- reg_dyn_forest02 %>%
+  group_by(adm2_code, adm1_name, adm2_name) %>%
+  summarise(
+    n_years        = n(),
+    mean_loss_ha   = mean(loss_ha, na.rm = TRUE),
+    max_loss_ha    = max(loss_ha,  na.rm = TRUE),
+    mean_defor     = mean(defor_rate, na.rm = TRUE),
+    max_defor      = max(defor_rate,  na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# 分布の確認（必要なら）
+summary(dyn_frontier_stats$mean_loss_ha)
+summary(dyn_frontier_stats$max_loss_ha)
+summary(dyn_frontier_stats$mean_defor)
+summary(dyn_frontier_stats$max_defor)
+
+```
+
+ほとんど伐採が起きていない ADM2はかなり少ない
+閾値を四分位点ベースで決めてフロンティアだけ残す
+
+- 「森林率 ≥ 2%」かつ「deforestation の規模が下位 25% より上の ADM2」を main frontier
+- 「森林率 ≥ 2%」かつ「deforestation の規模が中央値より上の ADM2」を strict frontier
+として、Assunção / Burgess の「森林のある地域＋実際に deforestation の起きているフロンティア」にかなり近いサンプル設計になります。
+
+```{r select thresolds}
+# --------------------------------------------------
+# 1. 四分位点から閾値を計算
+# --------------------------------------------------
+q_max_loss  <- quantile(dyn_frontier_stats$max_loss_ha,  probs = c(0.25, 0.5), na.rm = TRUE)
+q_max_defor <- quantile(dyn_frontier_stats$max_defor,    probs = c(0.25, 0.5), na.rm = TRUE)
+
+q_max_loss
+q_max_defor
+```
+
+```{r select thresolds}
+# --------------------------------------------------
+# 2. フロンティア指標を定義
+#    - loose: 1四分位以上の deforestation を経験した ADM2
+#    - strict: 中央値以上の deforestation を経験した ADM2
+# --------------------------------------------------
+dyn_frontier_stats <- dyn_frontier_stats %>%
+  mutate(
+    # 緩めの定義（main spec）
+    is_frontier_loose = (max_loss_ha >= q_max_loss[1]) |
+                        (max_defor   >= q_max_defor[1]),
+
+    # 厳しめの定義（robustness）
+    is_frontier_strict = (max_loss_ha >= q_max_loss[2]) |
+                         (max_defor   >= q_max_defor[2])
+  )
+
+# どれくらい残るか確認
+dyn_frontier_stats %>%
+  summarise(
+    n_total  = n(),
+    n_loose  = sum(is_frontier_loose),
+    n_strict = sum(is_frontier_strict)
+  )
+```
+
+```{r select thresolds}
+# --------------------------------------------------
+# 3. ADM2 フラグを元データ（reg_dyn_forest02）に戻す
+# --------------------------------------------------
+reg_dyn_frontier <- reg_dyn_forest02 %>%
+  left_join(
+    dyn_frontier_stats %>%
+      select(adm2_code, is_frontier_loose, is_frontier_strict),
+    by = "adm2_code"
+  )
+
+
+# メイン仕様: loose frontier サンプル
+reg_dyn_frontier_loose <- reg_dyn_frontier %>%
+  filter(is_frontier_loose)
+
+# ロバストネス: strict frontier サンプル
+reg_dyn_frontier_strict <- reg_dyn_frontier %>%
+  filter(is_frontier_strict)
+
+# チェック
+nrow(reg_dyn_forest02)
+nrow(reg_dyn_frontier_loose)
+nrow(reg_dyn_frontier_strict)
+
+reg_dyn_frontier_loose %>% count(adm1_name, sort = TRUE)
+reg_dyn_frontier_strict %>% count(adm1_name, sort = TRUE)
+```
+
+## ステップ4
+
+share_forest2000 = forest2000_ha / total_ha の中央値以上の ADM2 だけを使うサンプルを作成
+
+```{r add share_forest2000}
+
+# --------------------------------------------------
+# 1. baseline 森林率 share_forest2000 を reg_dyn_main_islands に作成
+# --------------------------------------------------
+reg_dyn_main_islands <- reg_dyn_main_islands %>%
+  mutate(
+    share_forest2000 = forest2000_ha / total_ha
+  )
+
+# baseline 森林率の分布確認（任意）
+summary(reg_dyn_main_islands$share_forest2000)
+```
+
+```{r get median as thresold}
+# --------------------------------------------------
+# 2. 中央値（median）を閾値として計算
+# --------------------------------------------------
+med_share_forest2000 <- median(
+  reg_dyn_main_islands$share_forest2000,
+  na.rm = TRUE
+)
+
+med_share_forest2000  # 実際の値を確認しておく
+
+```
+
+
+```{r robustness sample}
+# --------------------------------------------------
+# 3. 中央値以上の ADM2 のみを使うロバストネス・サンプル
+#    (a) frontier まで考慮しない純粋な「高森林率サンプル」
+# --------------------------------------------------
+reg_dyn_forest_median <- reg_dyn_main_islands %>%
+  filter(share_forest2000 >= med_share_forest2000)
+
+# チェック
+reg_dyn_forest_median %>%
+  count(adm1_name, sort = TRUE)
+
+```
+
+```{r robustness sample with frontier}
+# --------------------------------------------------
+# 4. frontier 条件も同時に満たすロバストネス・サンプル
+#    - main spec: reg_dyn_frontier_loose の中で median 以上だけ
+#    - strict spec: reg_dyn_frontier_strict の中で median 以上だけ
+# --------------------------------------------------
+
+# まず reg_dyn_frontier に baseline 森林率を持たせておく
+reg_dyn_frontier <- reg_dyn_frontier %>%
+  mutate(
+    share_forest2000 = forest2000_ha / total_ha
+  )
+
+# (a) main spec (loose frontier + median 以上の森林率)
+reg_dyn_frontier_loose_med <- reg_dyn_frontier %>%
+  filter(
+    is_frontier_loose,
+    share_forest2000 >= med_share_forest2000
+  )
+
+# (b) strict spec (strict frontier + median 以上の森林率)
+reg_dyn_frontier_strict_med <- reg_dyn_frontier %>%
+  filter(
+    is_frontier_strict,
+    share_forest2000 >= med_share_forest2000
+  )
+
+# 観測数の確認
+nrow(reg_dyn_frontier_loose)
+nrow(reg_dyn_frontier_loose_med)
+
+nrow(reg_dyn_frontier_strict)
+nrow(reg_dyn_frontier_strict_med)
+
+# 州別の分布も確認
+reg_dyn_frontier_loose_med %>%
+  count(adm1_name, sort = TRUE)
+
+reg_dyn_frontier_strict_med %>%
+  count(adm1_name, sort = TRUE)
+```
+
+## data = reg_dyn_frontier_loose
+reg_dyn_frontier_loose は、
+- main forest islands（Sumatra / Kalimantan / Sulawesi / Papua）のみ
+- baseline 森林率 forest2000_ha / total_ha >= 0.02
+- 2019–2024 のあいだに「そこそこ deforestation が起きている ADM2」
+（max_loss_ha と max_defor がそれぞれ第1四分位以上）
+という条件をすべて満たすサンプル
+
+
+# 2SLS robust
+
+```{r 2SLS_first_stage_lag robust, echo=FALSE}
+fs_ln_alerts_l1 <- feols(
+  ln_alerts_l1 ~ cloud_share_l1 + chirps_mm + burned_ha |
+    adm2_code + year,
+  data = reg_dyn_frontier_loose,
+  cluster = ~adm2_code
+)
+
+summary(fs_ln_alerts_l1)
+```
+
+```{r 2SLS_second_stage_lag robust, echo=FALSE}
+iv_defor_l1 <- feols(
+  defor_rate ~ chirps_mm + burned_ha |      # 外生コントロール（当期）
+    adm2_code + year |                      # 固定効果
+    ln_alerts_l1 ~ cloud_share_l1,          # 内生 ~ IV（ともに1期ラグ）
+  data = reg_dyn_frontier_loose,
+  cluster = ~adm2_code
+)
+
+summary(iv_defor_l1)
+```
+
+
+# Dynamic 2SLS robust
+```{r dyn_2sls first robust, echo=FALSE}
+dyn_iv <- feols(
+  defor_rate ~ defor_rate_l1 + chirps_mm + burned_ha |
+    adm2_code + year |
+    ln_alerts_l1 ~ cloud_share_l1,
+  data = reg_dyn_frontier_loose,
+  cluster = ~adm2_code
+)
+
+# first stage
+summary(dyn_iv, stage = 1)
+```
+
+```{r dyn_2sls first robust, echo=FALSE}
+summary(dyn_iv, stage = 2)
+```
+
+# Robustness Check
+data = reg_dyn_frontier_strict
+→ main forest islands ＋ baseline 森林率 ≥ 2% ＋ frontier（厳しめ）のサンプル
+
+data = reg_dyn_frontier_loose_med
+→ main forest islands ＋ baseline 森林率 ≥ 2% ＋ frontier（厳しめ）のサンプル
+
+## data = reg_dyn_frontier_strict
+
+```{r 2SLS_first_stage_lag robust, echo=FALSE}
+fs_ln_alerts_l1 <- feols(
+  ln_alerts_l1 ~ cloud_share_l1 + chirps_mm + burned_ha |
+    adm2_code + year,
+  data = reg_dyn_frontier_strict,
+  cluster = ~adm2_code
+)
+
+summary(fs_ln_alerts_l1)
+```
+
+```{r 2SLS_second_stage_lag robust, echo=FALSE}
+iv_defor_l1 <- feols(
+  defor_rate ~ chirps_mm + burned_ha |      # 外生コントロール（当期）
+    adm2_code + year |                      # 固定効果
+    ln_alerts_l1 ~ cloud_share_l1,          # 内生 ~ IV（ともに1期ラグ）
+  data = reg_dyn_frontier_strict,
+  cluster = ~adm2_code
+)
+
+summary(iv_defor_l1)
+```
+
+
+```{r dyn_2sls first robust, echo=FALSE}
+dyn_iv <- feols(
+  defor_rate ~ defor_rate_l1 + chirps_mm + burned_ha |
+    adm2_code + year |
+    ln_alerts_l1 ~ cloud_share_l1,
+  data = reg_dyn_frontier_strict,
+  cluster = ~adm2_code
+)
+
+# first stage
+summary(dyn_iv, stage = 1)
+```
+
+```{r dyn_2sls first robust, echo=FALSE}
+summary(dyn_iv, stage = 2)
+```
+
+
+## data = reg_dyn_frontier_loose_med
+
+```{r 2SLS_first_stage_lag robust, echo=FALSE}
+fs_ln_alerts_l1 <- feols(
+  ln_alerts_l1 ~ cloud_share_l1 + chirps_mm + burned_ha |
+    adm2_code + year,
+  data = reg_dyn_frontier_loose_med,
+  cluster = ~adm2_code
+)
+
+summary(fs_ln_alerts_l1)
+```
+
+```{r 2SLS_second_stage_lag robust, echo=FALSE}
+iv_defor_l1 <- feols(
+  defor_rate ~ chirps_mm + burned_ha |      # 外生コントロール（当期）
+    adm2_code + year |                      # 固定効果
+    ln_alerts_l1 ~ cloud_share_l1,          # 内生 ~ IV（ともに1期ラグ）
+  data = reg_dyn_frontier_loose_med,
+  cluster = ~adm2_code
+)
+
+summary(iv_defor_l1)
+```
+
+
+```{r dyn_2sls first robust, echo=FALSE}
+dyn_iv <- feols(
+  defor_rate ~ defor_rate_l1 + chirps_mm + burned_ha |
+    adm2_code + year |
+    ln_alerts_l1 ~ cloud_share_l1,
+  data = reg_dyn_frontier_loose_med,
+  cluster = ~adm2_code
+)
+
+# first stage
+summary(dyn_iv, stage = 1)
+```
+
+```{r dyn_2sls first robust, echo=FALSE}
+summary(dyn_iv, stage = 2)
+```
+
 
 
 
