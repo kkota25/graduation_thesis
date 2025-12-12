@@ -514,6 +514,14 @@ first stage が強くなる可能性がある（雲の短期ショックが効�
 - Cloudsのデータセットが年次なので、月次の取得がむずかしい
 
 
+
+# 分析地域の選択
+
+```{r fig_evergreen_2019, echo=FALSE, out.width="80%", fig.cap="熱帯常緑広葉樹の被覆率（2019年）"}
+knitr::include_graphics("../outputs/figures/choropleth/map_evergreen_share_2019.png")
+```
+
+
 # 自治体の選定
 - ステップ1：
 「main forest islands」に近い島（例：Sumatra, Kalimantan, Sulawesi, Papua）に限定。
@@ -523,7 +531,7 @@ forest2000_ha / total_ha が 2–5% 未満の ADM2 を落とす（Assunção の
 2019–2024 の loss_ha や defor_rate がずっとゼロに近い ADM2 を除外（前線ではない地域を削る）。
 - ステップ4（ロバストネス）：
 forest2000_ha / total_ha が中央値以上の ADM2 だけのサンプルでも再推定。
-とすると、Assunção と Burgessのサンプル構築思想をかなり忠実に踏まえた「森林のある自治体サンプル」になります。
+
 
 ## ステップ1
 
@@ -858,7 +866,7 @@ reg_dyn_frontier_loose は、
 という条件をすべて満たすサンプル
 
 
-# 2SLS robust
+# 2SLS main
 
 ```{r 2SLS_first_stage_lag robust, echo=FALSE}
 fs_ln_alerts_l1 <- feols(
@@ -884,7 +892,8 @@ summary(iv_defor_l1)
 ```
 
 
-# Dynamic 2SLS robust
+# Dynamic 2SLS main
+
 ```{r dyn_2sls first robust, echo=FALSE}
 dyn_iv <- feols(
   defor_rate ~ defor_rate_l1 + chirps_mm + burned_ha |
