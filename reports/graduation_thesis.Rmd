@@ -22,6 +22,7 @@ header-includes:
 - 問題点
 
 - 分析を熱帯雨林の伐採が主に行われている自治体に絞る
+→先行研究に倣う
 
 
 ```{r setup, include=FALSE}
@@ -113,18 +114,6 @@ Google Earth engine上で ADM2×年単位に集計
 最終的に`data/processed/adm2_reg_2019_2024.parquet`（ADM2×年のパネル）を作成
 
 
-### Google Earth Engine 例
-```{r gee clouds, echo=FALSE, out.width="80%"}
-knitr::include_graphics("../reports/20251204_gee_clouds.png")
-```
-
-
-### 生データcsvファイル　例：clouds
-```{r raw clouds data, echo=FALSE, out.width="80%"}
-knitr::include_graphics("../reports/20251205_cloud_csv.png")
-```
-
-
 ## 主な変数
 
 - `defor_rate`：森林減少率（forest loss / 初期森林面積）
@@ -138,10 +127,6 @@ knitr::include_graphics("../reports/20251205_cloud_csv.png")
 ## データ
 ```{r data, echo=FALSE}
 reg_dt <- arrow::read_parquet("../data/processed/adm2_reg_2019_2024.parquet")
-```
-
-```{r data view, echo=FALSE, out.width="80%"}
-knitr::include_graphics("../reports/20251205_dataview.png")
 ```
 
 Burgess et al. (2012)は、分析対象をインドネシア全土ではなく、
@@ -170,42 +155,10 @@ knitr::include_graphics("../outputs/figures/choropleth/alerts/map_ha_alerts_2024
 ```
 
 ### alerts の分布（例：2019 年）
-```{r alerts spatial distributuon, echo=FALSE, out.width="80%"}
+```{r alerts distributuon, echo=FALSE, out.width="80%"}
 knitr::include_graphics("../outputs/figures/hist/hist_ha_alerts.png")
 knitr::include_graphics("../outputs/figures/hist/hist_ln_alerts.png")
 ```
-
-
-### cloud_share と ln_alerts の散布図（操作変数の妥当性?）
-
-
-第一段階：
-
-$$
-\ln(alerts_{i,t-1}+1)
-= \beta_1 \,cloud\_share_{i,t-1}
-+ \beta_2 \,chirps\_mm_{it}
-+ \beta_3 \,burned\_ha_{it}
-+ \alpha_i + \lambda_t + v_{it}.\\
-$$
-
-第ニ段階：
-
-$$
-defor\_rate_{it}
-= \beta_1 \,\widehat{\ln(alerts_{i,t-1}+1)}
-+ \beta_2 \,chirps\_mm_{it}
-+ \beta_3 \,burned\_ha_{it}
-+ \alpha_i + \lambda_t + \varepsilon_{it}.
-$$
-
-
-
-```{r scatter clouds alerts, echo=FALSE, out.width="80%"}
-knitr::include_graphics("../outputs/figures/scatter/scatter_cloud_share_vs_ln_alerts.png")
-```
-
-雲量シェアが高いほど ln_alerts が低くなる負の相関が見られ、cloud_share が alerts の観測可能性に影響していることを示唆。
 
 
 
@@ -274,6 +227,16 @@ $$
 + \alpha_i + \lambda_t + v_{it}.
 $$
 
+### second stage model
+$$
+defor\_rate_{it}
+= \beta_1 \,\widehat{\ln(alerts_{it}+1)}
++ \beta_1 \,chirps\_mm_{it}
++ \beta_1 \,burned\_ha_{it}
++ \alpha_i + \lambda_t + \varepsilon_{it}.
+$$
+
+
 ```{r 2SLS first_stage, echo=FALSE}
 fs_ln_alerts <- feols(
   ln_alerts ~ cloud_share + chirps_mm + burned_ha |
@@ -300,13 +263,7 @@ summary(fs_ln_alerts)
 
 ## 2SLS second stage
 ### second stage model
-$$
-defor\_rate_{it}
-= \beta_1 \,\widehat{\ln(alerts_{it}+1)}
-+ \beta_1 \,chirps\_mm_{it}
-+ \beta_1 \,burned\_ha_{it}
-+ \alpha_i + \lambda_t + \varepsilon_{it}.
-$$
+
 
 ```{r 2SLS_second_stage, echo=FALSE}
 iv_defor <- feols(
@@ -345,6 +302,16 @@ $$
 + \alpha_i + \lambda_t + v_{it}.
 $$
 
+### Second stage
+
+$$
+defor\_rate_{it}
+= \beta_1 \,\widehat{\ln(alerts_{i,t-1}+1)}
++ \beta_2 \,chirps\_mm_{it}
++ \beta_3 \,burned\_ha_{it}
++ \alpha_i + \lambda_t + \varepsilon_{it}.
+$$
+
 ```{r 2SLS_first_stage_lag, echo=FALSE}
 fs_ln_alerts_l1 <- feols(
   ln_alerts_l1 ~ cloud_share_l1 + chirps_mm + burned_ha |
@@ -366,13 +333,7 @@ summary(fs_ln_alerts_l1)
 → ラグを取ることで、cloud_share_l1 は ln_alerts_l1 に対する「強い操作変数」になっている。
 
 ### Second stage
-$$
-defor\_rate_{it}
-= \beta_1 \,\widehat{\ln(alerts_{i,t-1}+1)}
-+ \beta_2 \,chirps\_mm_{it}
-+ \beta_3 \,burned\_ha_{it}
-+ \alpha_i + \lambda_t + \varepsilon_{it}.
-$$
+
 
 ```{r 2SLS_second_stage_lag, echo=FALSE}
 iv_defor_l1 <- feols(
@@ -422,12 +383,11 @@ defor\_rate_{it}
 = \beta_0
  + \beta_1 \,\widehat{\ln(alerts_{i,t-1}+1)}
  + \beta_2 \,defor\_rate_{i,t-1} \\
+  &\quad
  + \beta_3 \,chirps\_mm_{it}
  + \beta_4 \,burned\_ha_{it}
  + \alpha_i + \lambda_t + \varepsilon_{it}.
 $$
-
-
 
 
 ```{r dyn_2sls first, echo=FALSE}
@@ -449,26 +409,9 @@ summary(dyn_iv, stage = 2)
 ```
 
 
-## ダイナミック・パネル 2SLS (ln(alerts+1)=0を除外)
-アラートが発令されてない場所は森林じゃない？→除外
 
-```{r dyn_2sls first, echo=FALSE}
-dyn_iv <- feols(
-  defor_rate ~ defor_rate_l1 + chirps_mm + burned_ha |
-    adm2_code + year |
-    ln_alerts_l1 ~ cloud_share_l1,
-  data    = reg_dyn_nz,
-  cluster = ~adm2_code
-)
 
-# first stage
-summary(dyn_iv, stage = 1)
-```
 
-```{r dyn_2sls second, echo=FALSE}
-# second stage
-summary(dyn_iv, stage = 2)
-```
 
 # 技術的な限界
 ## データの限界
@@ -538,14 +481,12 @@ forest2000_ha / total_ha が中央値以上の ADM2 だけのサンプルでも�
 Burgess et al. (2012) says “We focus our analysis on the main forest islands of Indonesia: moving from west to east, these are Sumatra, Kalimantan, Sulawesi and Papua. The remaining islands (Java, Bali, NTB/NTT, Maluku, and the Riau Islands near Singapore), shown in white, have negligible forest cover in our satellite data.”
 
 ```{r extract islands, echo=FALSE}
-# --------------------------------------------------
 # Burgess (2012) に倣って main forest islands のみ残す
 #   - 入力: reg_dyn（summary(reg_dyn) のデータフレーム）
 #   - 出力:
 #       * drop_adm1: 落とす州
 #       * keep_adm1: 残す州
 #       * reg_dyn_main_islands: main forest islands のみのデータ
-# --------------------------------------------------
 
 
 # 1. 落とすべき adm1_name（Java, Bali, Nusa Tenggara, Maluku, Riau Islands）
@@ -642,13 +583,13 @@ reg_dyn_forest02 <- reg_dyn_main_islands %>%
 ```
 
 ```{r extract municipalities with 5% or more}
-# 2. 閾値 2%（0.02）未満の ADM2 を落とす ----------------------------
+# 2. 閾値 5%（0.05）未満の ADM2 を落とす ----------------------------
 #   - 「森林率が 2% 以上」の ADM2 だけ残す
-# reg_dyn_forest02 <- reg_dyn_main_islands %>%
-#   filter(share_forest2000 >= 0.02)
+# reg_dyn_forest05 <- reg_dyn_main_islands %>%
+#   filter(share_forest2000 >= 0.05)
 
 # チェック：州ごとの観測数
-#reg_dyn_forest02 %>%
+#reg_dyn_forest05 %>%
 #  count(adm1_name, sort = TRUE)
 ```
 
@@ -662,14 +603,14 @@ ADM2 ごとに
 などを集計し、「常にゼロに近い」ADM2 を除外
 
 ```{r frontier des stats}
-# --------------------------------------------------
+
 # Step 3: 2019–2024 の loss_ha / defor_rate が「ほぼゼロ」の ADM2 を除外
 #   - 入力: reg_dyn_forest02
 #   - 出力:
 #       * dyn_frontier_stats : ADM2 ごとの要約
 #       * reg_dyn_frontier_loose : 緩めのフロンティア定義
 #       * reg_dyn_frontier_strict: 厳しめのフロンティア定義（ロバストネス）
-# --------------------------------------------------
+
 
 
 # 0. 念のため、対象期間を明示（reg_dyn は既に 2020–2024 のはずだが）
@@ -704,9 +645,8 @@ summary(dyn_frontier_stats$max_defor)
 として、Assunção / Burgess の「森林のある地域＋実際に deforestation の起きているフロンティア」にかなり近いサンプル設計になります。
 
 ```{r select thresolds}
-# --------------------------------------------------
 # 1. 四分位点から閾値を計算
-# --------------------------------------------------
+
 q_max_loss  <- quantile(dyn_frontier_stats$max_loss_ha,  probs = c(0.25, 0.5), na.rm = TRUE)
 q_max_defor <- quantile(dyn_frontier_stats$max_defor,    probs = c(0.25, 0.5), na.rm = TRUE)
 
@@ -714,12 +654,12 @@ q_max_loss
 q_max_defor
 ```
 
-```{r select thresolds}
-# --------------------------------------------------
+```{r define frontier}
+
 # 2. フロンティア指標を定義
 #    - loose: 1四分位以上の deforestation を経験した ADM2
 #    - strict: 中央値以上の deforestation を経験した ADM2
-# --------------------------------------------------
+
 dyn_frontier_stats <- dyn_frontier_stats %>%
   mutate(
     # 緩めの定義（main spec）
@@ -740,10 +680,10 @@ dyn_frontier_stats %>%
   )
 ```
 
-```{r select thresolds}
-# --------------------------------------------------
+```{r generate data with frontier}
+
 # 3. ADM2 フラグを元データ（reg_dyn_forest02）に戻す
-# --------------------------------------------------
+
 reg_dyn_frontier <- reg_dyn_forest02 %>%
   left_join(
     dyn_frontier_stats %>%
@@ -775,9 +715,9 @@ share_forest2000 = forest2000_ha / total_ha の中央値以上の ADM2 だけを
 
 ```{r add share_forest2000}
 
-# --------------------------------------------------
+
 # 1. baseline 森林率 share_forest2000 を reg_dyn_main_islands に作成
-# --------------------------------------------------
+
 reg_dyn_main_islands <- reg_dyn_main_islands %>%
   mutate(
     share_forest2000 = forest2000_ha / total_ha
@@ -788,9 +728,9 @@ summary(reg_dyn_main_islands$share_forest2000)
 ```
 
 ```{r get median as thresold}
-# --------------------------------------------------
+
 # 2. 中央値（median）を閾値として計算
-# --------------------------------------------------
+
 med_share_forest2000 <- median(
   reg_dyn_main_islands$share_forest2000,
   na.rm = TRUE
@@ -802,10 +742,10 @@ med_share_forest2000  # 実際の値を確認しておく
 
 
 ```{r robustness sample}
-# --------------------------------------------------
+
 # 3. 中央値以上の ADM2 のみを使うロバストネス・サンプル
 #    (a) frontier まで考慮しない純粋な「高森林率サンプル」
-# --------------------------------------------------
+
 reg_dyn_forest_median <- reg_dyn_main_islands %>%
   filter(share_forest2000 >= med_share_forest2000)
 
@@ -816,11 +756,11 @@ reg_dyn_forest_median %>%
 ```
 
 ```{r robustness sample with frontier}
-# --------------------------------------------------
+
 # 4. frontier 条件も同時に満たすロバストネス・サンプル
 #    - main spec: reg_dyn_frontier_loose の中で median 以上だけ
 #    - strict spec: reg_dyn_frontier_strict の中で median 以上だけ
-# --------------------------------------------------
+
 
 # まず reg_dyn_frontier に baseline 森林率を持たせておく
 reg_dyn_frontier <- reg_dyn_frontier %>%
@@ -868,7 +808,7 @@ reg_dyn_frontier_loose は、
 
 # 2SLS main
 
-```{r 2SLS_first_stage_lag robust, echo=FALSE}
+```{r 2SLS_first_stage_lag main, echo=FALSE}
 fs_ln_alerts_l1 <- feols(
   ln_alerts_l1 ~ cloud_share_l1 + chirps_mm + burned_ha |
     adm2_code + year,
@@ -879,7 +819,7 @@ fs_ln_alerts_l1 <- feols(
 summary(fs_ln_alerts_l1)
 ```
 
-```{r 2SLS_second_stage_lag robust, echo=FALSE}
+```{r 2SLS_second_stage_lag main, echo=FALSE}
 iv_defor_l1 <- feols(
   defor_rate ~ chirps_mm + burned_ha |      # 外生コントロール（当期）
     adm2_code + year |                      # 固定効果
@@ -894,7 +834,7 @@ summary(iv_defor_l1)
 
 # Dynamic 2SLS main
 
-```{r dyn_2sls first robust, echo=FALSE}
+```{r dyn_2sls main first, echo=FALSE}
 dyn_iv <- feols(
   defor_rate ~ defor_rate_l1 + chirps_mm + burned_ha |
     adm2_code + year |
@@ -907,7 +847,7 @@ dyn_iv <- feols(
 summary(dyn_iv, stage = 1)
 ```
 
-```{r dyn_2sls first robust, echo=FALSE}
+```{r dyn_2sls main second, echo=FALSE}
 summary(dyn_iv, stage = 2)
 ```
 
@@ -920,7 +860,7 @@ data = reg_dyn_frontier_loose_med
 
 ## data = reg_dyn_frontier_strict
 
-```{r 2SLS_first_stage_lag robust, echo=FALSE}
+```{r 2SLS_first_stage_lag robust 1st, echo=FALSE}
 fs_ln_alerts_l1 <- feols(
   ln_alerts_l1 ~ cloud_share_l1 + chirps_mm + burned_ha |
     adm2_code + year,
@@ -931,7 +871,7 @@ fs_ln_alerts_l1 <- feols(
 summary(fs_ln_alerts_l1)
 ```
 
-```{r 2SLS_second_stage_lag robust, echo=FALSE}
+```{r 2SLS_second_stage_lag robust 2nd, echo=FALSE}
 iv_defor_l1 <- feols(
   defor_rate ~ chirps_mm + burned_ha |      # 外生コントロール（当期）
     adm2_code + year |                      # 固定効果
@@ -957,14 +897,14 @@ dyn_iv <- feols(
 summary(dyn_iv, stage = 1)
 ```
 
-```{r dyn_2sls first robust, echo=FALSE}
+```{r dyn_2sls second robust, echo=FALSE}
 summary(dyn_iv, stage = 2)
 ```
 
 
 ## data = reg_dyn_frontier_loose_med
 
-```{r 2SLS_first_stage_lag robust, echo=FALSE}
+```{r 2SLS_first_stage_lag loose 1st, echo=FALSE}
 fs_ln_alerts_l1 <- feols(
   ln_alerts_l1 ~ cloud_share_l1 + chirps_mm + burned_ha |
     adm2_code + year,
@@ -975,7 +915,7 @@ fs_ln_alerts_l1 <- feols(
 summary(fs_ln_alerts_l1)
 ```
 
-```{r 2SLS_second_stage_lag robust, echo=FALSE}
+```{r 2SLS_second_stage_lag loose 2nd, echo=FALSE}
 iv_defor_l1 <- feols(
   defor_rate ~ chirps_mm + burned_ha |      # 外生コントロール（当期）
     adm2_code + year |                      # 固定効果
@@ -988,7 +928,7 @@ summary(iv_defor_l1)
 ```
 
 
-```{r dyn_2sls first robust, echo=FALSE}
+```{r dyn_2sls first loose 1st, echo=FALSE}
 dyn_iv <- feols(
   defor_rate ~ defor_rate_l1 + chirps_mm + burned_ha |
     adm2_code + year |
@@ -1001,7 +941,7 @@ dyn_iv <- feols(
 summary(dyn_iv, stage = 1)
 ```
 
-```{r dyn_2sls first robust, echo=FALSE}
+```{r dyn_2sls first loose 2nd, echo=FALSE}
 summary(dyn_iv, stage = 2)
 ```
 
