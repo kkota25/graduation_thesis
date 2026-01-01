@@ -1,0 +1,29 @@
+\begin{table}[!h]
+\centering
+\caption{\label{tab:tab:table1}Summary statistics (ADM2-year panel).}
+\centering
+\resizebox{\ifdim\width>\linewidth\linewidth\else\width\fi}{!}{
+\fontsize{8}{10}\selectfont
+\begin{tabular}[t]{lrrrrrrrrrrrr}
+\toprule
+\multicolumn{1}{c}{ } & \multicolumn{9}{c}{Summary statistics} & \multicolumn{4}{c}{Alerts distribution (only ha\textbackslash{}\_alerts)} \\
+\cmidrule(l{3pt}r{3pt}){2-10} \cmidrule(l{3pt}r{3pt}){11-14}
+Variable & N & Mean & SD & Min & P25 & Median & P75 & Max & Zero share & P90 & P95 & P99\\
+\midrule
+\addlinespace[0.3em]
+\multicolumn{13}{l}{\textbf{Panel A: Outcomes}}\\
+\hspace{1em}Forest loss (ha) & 2274 & 3429.292 & 6467.508 & 0.000 & 80.095 & 768.469 & 3674.104 & 79505.973 & NA & NA & NA & NA\\
+\hspace{1em}Deforestation rate (loss / forest2000) & 2274 & 0.008 & 0.008 & 0.000 & 0.002 & 0.005 & 0.011 & 0.127 & NA & NA & NA & NA\\
+\addlinespace[0.3em]
+\multicolumn{13}{l}{\textbf{Panel B: Treatment and instrument}}\\
+\hspace{1em}GFW integrated alerts (ha) & 2658 & 26645.241 & 58201.329 & 0.000 & 0.000 & 3053.819 & 26572.257 & 726981.198 & 0.264 & 76675.48 & 136443 & 274455.5\\
+\hspace{1em}ln(alerts ha + 1) & 2658 & 6.573 & 4.363 & 0.000 & 0.000 & 8.024 & 10.188 & 13.497 & NA & NA & NA & NA\\
+\hspace{1em}Cloud share (annual mean) & 2244 & 0.664 & 0.101 & 0.315 & 0.604 & 0.687 & 0.741 & 0.876 & NA & NA & NA & NA\\
+\addlinespace[0.3em]
+\multicolumn{13}{l}{\textbf{Panel C: Controls and baseline endowments}}\\
+\hspace{1em}Rainfall (CHIRPS, annual total mm) & 2658 & 2730.078 & 755.788 & 858.983 & 2195.282 & 2703.873 & 3201.479 & 5634.874 & NA & NA & NA & NA\\
+\hspace{1em}Burned area (ha) & 2274 & 922.598 & 8883.859 & 0.000 & 0.000 & 0.000 & 0.000 & 249213.205 & NA & NA & NA & NA\\
+\hspace{1em}Baseline forest endowment (ha, year 2000) & 2274 & 396548.421 & 626184.149 & 0.710 & 27393.803 & 132946.359 & 486686.578 & 3842153.218 & NA & NA & NA & NA\\
+\bottomrule
+\end{tabular}}
+\end{table}

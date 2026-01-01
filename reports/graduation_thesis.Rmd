@@ -31,8 +31,12 @@ knitr::opts_chunk$set(echo = TRUE)
 library(fixest)
 library(arrow)
 library(dplyr)
+library(modelsummary)
 
 reg_dt <- arrow::read_parquet("../data/processed/adm2_reg_2019_2024.parquet")
+
+proj_root <- rprojroot::find_rstudio_root_file()  
+out_file  <- file.path(proj_root, "outputs", "tables", "reg_dyn_2sls.tex")
 ```
 
 ```{r dyn_data, echo=FALSE}
@@ -137,6 +141,124 @@ Burgess et al. (2012)は、分析対象をインドネシア全土ではなく�
 summary(reg_dt)
 ```
 
+```{r data summary tex, echo=FALSE}
+# ---- Table 1: Descriptive statistics (ADM2-year) -> LaTeX (auto fit width) ----
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(arrow)
+library(knitr)
+library(kableExtra)
+
+
+
+# 2) 変数セット（必要なら列名を調整）
+vars_outcome  <- c("loss_ha", "defor_rate")
+vars_treat_iv <- c("ha_alerts", "ln_alerts", "cloud_share")
+vars_controls <- c("chirps_mm", "burned_ha", "forest2000_ha")
+
+# 3) 表示ラベル
+var_labels <- c(
+  loss_ha       = "Forest loss (ha)",
+  defor_rate    = "Deforestation rate (loss / forest2000)",
+  ha_alerts     = "GFW integrated alerts (ha)",
+  ln_alerts     = "ln(alerts ha + 1)",
+  cloud_share   = "Cloud share (annual mean)",
+  chirps_mm     = "Rainfall (CHIRPS, annual total mm)",
+  burned_ha     = "Burned area (ha)",
+  forest2000_ha = "Baseline forest endowment (ha, year 2000)"
+)
+
+`%||%` <- function(a, b) if (!is.null(a) && !is.na(a) && nzchar(a)) a else b
+
+summarize_var <- function(x, add_alert_extras = FALSE) {
+  x_num <- suppressWarnings(as.numeric(x))
+  out <- tibble(
+    N      = sum(!is.na(x_num)),
+    Mean   = mean(x_num, na.rm = TRUE),
+    SD     = sd(x_num, na.rm = TRUE),
+    Min    = min(x_num, na.rm = TRUE),
+    P25    = quantile(x_num, 0.25, na.rm = TRUE, names = FALSE, type = 7),
+    Median = quantile(x_num, 0.50, na.rm = TRUE, names = FALSE, type = 7),
+    P75    = quantile(x_num, 0.75, na.rm = TRUE, names = FALSE, type = 7),
+    Max    = max(x_num, na.rm = TRUE)
+  )
+
+  if (add_alert_extras) {
+    out <- out %>% mutate(
+      `Zero share` = mean(x_num == 0, na.rm = TRUE),
+      P90 = quantile(x_num, 0.90, na.rm = TRUE, names = FALSE, type = 7),
+      P95 = quantile(x_num, 0.95, na.rm = TRUE, names = FALSE, type = 7),
+      P99 = quantile(x_num, 0.99, na.rm = TRUE, names = FALSE, type = 7)
+    )
+  } else {
+    out <- out %>% mutate(`Zero share` = NA_real_, P90 = NA_real_, P95 = NA_real_, P99 = NA_real_)
+  }
+  out
+}
+
+make_panel <- function(reg_dt, var_vec, panel_name) {
+  bind_rows(lapply(var_vec, function(v) {
+    add_extras <- (v == "ha_alerts")
+    summarize_var(reg_dt[[v]], add_alert_extras = add_extras) %>%
+      mutate(
+        Variable = var_labels[[v]] %||% v,
+        panel = panel_name
+      )
+  }))
+}
+
+tab <- bind_rows(
+  make_panel(reg_dt, vars_outcome,  "Panel A: Outcomes"),
+  make_panel(reg_dt, vars_treat_iv, "Panel B: Treatment and instrument"),
+  make_panel(reg_dt, vars_controls, "Panel C: Controls and baseline endowments")
+) %>%
+  select(panel, Variable, N, Mean, SD, Min, P25, Median, P75, Max, `Zero share`, P90, P95, P99) %>%
+  mutate(
+    across(c(Mean, SD, Min, P25, Median, P75, Max, P90, P95, P99), ~ round(.x, 3)),
+    `Zero share` = round(`Zero share`, 3)
+  )
+
+# 4) LaTeX 出力（ここが重要：scale_downで自動的に横幅に収める）
+out_path <- "../outputs/tables/table1_descriptive.tex"  # あなたのOverleaf構成に合わせる
+dir.create(dirname(out_path), recursive = TRUE, showWarnings = FALSE)
+
+tab_data <- tab %>% select(-panel)
+
+kbl_obj <- tab_data %>%
+  knitr::kable(
+    format    = "latex",
+    booktabs  = TRUE,
+    caption   = "Summary statistics (ADM2-year panel).",
+    label     = "tab:table1",          # ← \ref{tab:table1} が使える
+    align     = "lrrrrrrrrrrrr",
+    linesep   = ""
+  ) %>%
+  kableExtra::kable_styling(
+    latex_options = c("hold_position", "scale_down"),  # ← はみ出し対策
+    font_size     = 8                                   # 7〜9で調整
+  ) %>%
+  kableExtra::add_header_above(
+    c(" " = 1, "Summary statistics" = 9, "Alerts distribution (only ha\\_alerts)" = 4)
+  )
+
+# panel 行を詰める
+nA <- length(vars_outcome)
+nB <- length(vars_treat_iv)
+nC <- length(vars_controls)
+
+kbl_obj <- kbl_obj %>%
+  kableExtra::pack_rows("Panel A: Outcomes", 1, nA) %>%
+  kableExtra::pack_rows("Panel B: Treatment and instrument", nA + 1, nA + nB) %>%
+  kableExtra::pack_rows("Panel C: Controls and baseline endowments", nA + nB + 1, nA + nB + nC)
+
+kableExtra::save_kable(kbl_obj, file = out_path)
+
+out_path
+
+
+```
+
 
 ## 主要な図
 
@@ -190,12 +312,22 @@ defor\_rate_{it}
 + \alpha_i + \lambda_t + u_{it},
 $$
 
-```{r Baseline_OLS, echo=FALSE}
+```{r Baseline_FE_OLS, echo=FALSE}
 ols_defor <- feols(
   defor_rate ~ ln_alerts + chirps_mm + burned_ha |
     adm2_code + year,
   data    = reg_dt,
   cluster = ~adm2_code
+)
+
+out <- "../outputs/tables/table_5_1_baseline_feols.tex"
+
+modelsummary(
+  list("FE-OLS (TWFE)" = ols_defor),
+  output = out,
+  stars  = TRUE,
+  statistic = "std.error",
+  gof_omit  = "IC|Log|Adj|Within|FE"  # 必要なら調整
 )
 
 summary(ols_defor)
@@ -212,9 +344,6 @@ summary(ols_defor)
 
 - burned_ha：ほぼ 0（p≈0.99）
 焼失面積は、この仕様では defor_rate とほとんど関係が見られない。
-
-
-
 
 
 ## 2SLS 
@@ -236,6 +365,7 @@ defor\_rate_{it}
 + \alpha_i + \lambda_t + \varepsilon_{it}.
 $$
 
+### 解釈(2SLS 第一段階)
 
 ```{r 2SLS first_stage, echo=FALSE}
 fs_ln_alerts <- feols(
@@ -248,7 +378,6 @@ fs_ln_alerts <- feols(
 summary(fs_ln_alerts)
 ```
 
-### 解釈(2SLS 第一段階)
 - ln_alerts：0.000283（p≈0.13）
 アラート面積が増えるほど defor_rate は増える方向ですが、統計的に有意でない
 → 「alerts が多いほど森林減少率が高い」という関係は、はっきりとは確認できない
@@ -261,9 +390,7 @@ summary(fs_ln_alerts)
 焼失面積は、この仕様では defor_rate とほとんど関係が見られない。
 
 
-## 2SLS second stage
-### second stage model
-
+### 解釈(2SLS 第2段階)
 
 ```{r 2SLS_second_stage, echo=FALSE}
 iv_defor <- feols(
@@ -278,7 +405,6 @@ summary(iv_defor)
 
 ```
 
-### 解釈(2SLS 第ニ段階)
 - ln_alerts：0.000283（p≈0.13）
 アラート面積が増えるほど defor_rate は増える方向ですが、統計的に有意でない。
 → 「alerts が多いほど森林減少率が高い」という関係は、はっきりとは確認できない。
@@ -289,6 +415,25 @@ summary(iv_defor)
 
 - burned_ha：ほぼ 0（p≈0.99）
 焼失面積は、この仕様では defor_rate とほとんど関係が見られない。
+
+```{r export_table_5_2_nolag, echo=FALSE, message=FALSE, warning=FALSE}
+
+out_nolag <- "../outputs/tables/table_5_2_iv_nolag.tex"
+
+modelsummary(
+  list(
+    "First stage: ln(alerts+1)"  = fs_ln_alerts,
+    "Second stage: defor_rate"   = iv_defor
+  ),
+  output   = out_nolag,
+  stars    = TRUE,
+  statistic = "std.error",
+  gof_omit = "IC|Log|Adj|Within|FE"
+)
+
+# 確認（任意）
+file.exists(out_nolag)
+```
 
 
 ## 2SLS with a lag
@@ -312,6 +457,9 @@ defor\_rate_{it}
 + \alpha_i + \lambda_t + \varepsilon_{it}.
 $$
 
+
+### 解釈(2SLS ラグあり 第一段階)
+
 ```{r 2SLS_first_stage_lag, echo=FALSE}
 fs_ln_alerts_l1 <- feols(
   ln_alerts_l1 ~ cloud_share_l1 + chirps_mm + burned_ha |
@@ -323,7 +471,6 @@ fs_ln_alerts_l1 <- feols(
 summary(fs_ln_alerts_l1)
 ```
 
-### 解釈(2SLS ラグあり 第一段階)
 - cloud_share_l1：-2.75（p≈0.00013, t≈-3.88）
   - 雲量の 1 期ラグと ln_alerts の 1 期ラグの負の関係がかなり強くなっている。
   - t²≈15 → F≈15 と、経験則の 10 を上回り「IV としてはだいぶ強い」。
@@ -332,8 +479,8 @@ summary(fs_ln_alerts_l1)
 - burned_ha：正で p≈0.075（10%有意かどうかギリギリ）
 → ラグを取ることで、cloud_share_l1 は ln_alerts_l1 に対する「強い操作変数」になっている。
 
-### Second stage
 
+### 解釈(2SLS ラグあり 第ニ段階)
 
 ```{r 2SLS_second_stage_lag, echo=FALSE}
 iv_defor_l1 <- feols(
@@ -347,7 +494,6 @@ iv_defor_l1 <- feols(
 summary(iv_defor_l1)
 ```
 
-### 解釈(2SLS ラグあり 第ニ段階)
 - fit_ln_alerts_l1：0.00049（p≈0.56）
   - 点推定はごく小さい正の値。p 値 0.56 と大きく、有意ではない。
   - 「前年 alerts が多いほど翌年の defor_rate が変わる」という強い evidence は得られていない。
@@ -358,6 +504,26 @@ summary(iv_defor_l1)
 　- first stage はかなり強くなったが、second stage の alerts_l1 の係数は依然として有意でない。
 　- 「alerts が翌年の deforestation を抑制（または増加）している」という明確な証拠は得られていない。
 
+
+### 2) ラグあり（preferred）：First stage + Second stage を1枚に出す
+
+```{r export_table_5_2_lag, echo=FALSE, message=FALSE, warning=FALSE}
+
+out_lag <- "../outputs/tables/table_5_2_iv_lag.tex"
+
+modelsummary(
+  list(
+    "First stage (lag): ln(alerts+1)_{t-1}" = fs_ln_alerts_l1,
+    "Second stage (lag): defor_rate_t"      = iv_defor_l1
+  ),
+  output   = out_lag,
+  stars    = TRUE,
+  statistic = "std.error",
+  gof_omit = "IC|Log|Adj|Within|FE"
+)
+
+file.exists(out_lag)
+```
 
 ## ダイナミック・パネル 2SLS
 
@@ -399,62 +565,33 @@ dyn_iv <- feols(
   cluster = ~adm2_code
 )
 
+cat(
+  etable(
+    summary(dyn_iv, stage = 1:2),  # 1st→2nd の順に並べる
+    tex = TRUE,
+    # IVの統計量を表に載せたい場合（任意）
+    fitstat = ~ . + ivfall + ivwaldall.p
+  ),
+  sep = "\n"
+)
+
+tex_both <- etable(
+  summary(dyn_iv, stage = 1:2),
+  tex = TRUE,
+  fitstat = ~ . + ivfall + ivwaldall.p
+)
+
+writeLines(tex_both, "../outputs/tables/dyn_2sls_stages_1_2.tex")
+
 # first stage
 summary(dyn_iv, stage = 1)
 ```
 
-```{r dyn_2sls second, echo=FALSE}
+```{r dyn_2sls_second, echo=FALSE}
 # second stage
 summary(dyn_iv, stage = 2)
 ```
 
-
-
-
-
-
-# 技術的な限界
-## データの限界
-- Assunção et al. (2023)はデータは自治体×月の長期パネルを使用
-- 本研究は ADM2×年で 2019–2024 の 6 年のみ。
-→時間があれば、ADM2×月or ADM2×週のデータを取得
-
-- Google Earth Engineでは思いデータを出力するのに時間がかかる(時間的制約)
-
-- Alertsのデータは1000mメッシュで取得（当初は10m）
-
-
-# 今後の改善案
-## ラグの導入
-
-
-## 政策（enforcement）に近い変数を導入する
-インドネシアで利用可能な政策・制度の変数が取れるなら、以下のような強化が考えられる
-
-### 現実的に検討できそうな候補
-保護区・保全林（protected areas, conservation forest）比率
-・ADM2 内の protected area 面積シェア（固定的な cross-section）を計算し、
-・これと year を交差させたダミー（high-PA × post-2019）などを入れる。
-
-### どう使うか
-コントロール or 交互作用項 として回帰式に入れる(?)
-
-
-## 集計頻度を上げる
-
-### 月次・四半期集計のメリット
-雲量と alerts の「観測タイミング」の連動をより精密に捉えられる。
-first stage が強くなる可能性がある（雲の短期ショックが効いてくる）。
-
-### 実務的な課題
-今のパイプラインは ADM2×「年」単位で GEE→CSV→parquet を設計しているので、月次にすると
-- GEE のコードを ADM2×month 出力に全面書き換え
-- R 側の 02_, 03_ スクリプトも全て修正
-- データ量・計算負荷も増加
-
-- Burned area, Forest lossは月次で取得済み
-- AlertsはGEEのメモリ不足で取得が難しい
-- Cloudsのデータセットが年次なので、月次の取得がむずかしい
 
 
 
@@ -468,10 +605,13 @@ knitr::include_graphics("../outputs/figures/choropleth/map_evergreen_share_2019.
 # 自治体の選定
 - ステップ1：
 「main forest islands」に近い島（例：Sumatra, Kalimantan, Sulawesi, Papua）に限定。
+
 - ステップ2：
 forest2000_ha / total_ha が 2–5% 未満の ADM2 を落とす（Assunção の 2％ルールの district 版）。
+
 - ステップ3：
 2019–2024 の loss_ha や defor_rate がずっとゼロに近い ADM2 を除外（前線ではない地域を削る）。
+
 - ステップ4（ロバストネス）：
 forest2000_ha / total_ha が中央値以上の ADM2 だけのサンプルでも再推定。
 
@@ -554,12 +694,12 @@ reg_dyn_main_islands %>%
 
 ## ステップ2
 
---------------------------------------------------
 Step 2: forest2000_ha / total_ha が 2–5% 未満の ADM2 を落とす
    データ: reg_dyn_main_islands
    - share_forest2000 を作る
    - 閾値 2% と 5% でフィルタしたデータを作成
---------------------------------------------------
+   
+森林率が2/ 5%未満の自治体を除外
  
 ```{r generate forest rate in 2000}
 # 1. 2000年森林率（forest2000_ha / total_ha）を作成 ----------------
@@ -592,6 +732,11 @@ reg_dyn_forest02 <- reg_dyn_main_islands %>%
 #reg_dyn_forest05 %>%
 #  count(adm1_name, sort = TRUE)
 ```
+
+"reg_dyn_forest02": 森林率が2%未満の自治体を除外
+"reg_dyn_forest05": 森林率が5%未満の自治体を除外
+
+
 
 ## ステップ3
 2019–2024（あなたのケース）で deforestation がほぼゼロの ADM2 は、
@@ -652,13 +797,18 @@ q_max_defor <- quantile(dyn_frontier_stats$max_defor,    probs = c(0.25, 0.5), n
 
 q_max_loss
 q_max_defor
+
+
+# q_max_loss[1] は max_loss_ha の25パーセンタイル（下位25%と上位75%の境界）
+# q_max_loss[2] は max_loss_ha の中央値（50%点）
+# q_max_defor も同様に max_defor の25%点と中央値
 ```
 
 ```{r define frontier}
 
 # 2. フロンティア指標を定義
-#    - loose: 1四分位以上の deforestation を経験した ADM2
-#    - strict: 中央値以上の deforestation を経験した ADM2
+#    - loose: 1四分位以上の 「最大損失面積が大きい」または「最大損失率が大きい」 を経験した ADM2
+#    - strict: 中央値以上の 「最大損失面積が大きい」または「最大損失率が大きい」 を経験した ADM2
 
 dyn_frontier_stats <- dyn_frontier_stats %>%
   mutate(
@@ -709,21 +859,25 @@ reg_dyn_frontier_loose %>% count(adm1_name, sort = TRUE)
 reg_dyn_frontier_strict %>% count(adm1_name, sort = TRUE)
 ```
 
+「森林率 ≥ 2%」かつ
+
+reg_dyn_frontier_loose: 「最大損失面積が大きい」または「最大損失率が大きい」ADM2なら frontier (上位75%)
+reg_dyn_frontier_strict: 「最大損失面積が大きい」または「最大損失率が大きい」ADM2なら frontier (上位50%)
+
+reg_dyn_frontier_loose <- reg_dyn_frontier %>%
+  filter(is_frontier_loose)
+  
+reg_dyn_frontier_strict <- reg_dyn_frontier %>%
+  filter(is_frontier_strict)
+  
+
+
 ## ステップ4
 
 share_forest2000 = forest2000_ha / total_ha の中央値以上の ADM2 だけを使うサンプルを作成
 
-```{r add share_forest2000}
-
-
-# 1. baseline 森林率 share_forest2000 を reg_dyn_main_islands に作成
-
-reg_dyn_main_islands <- reg_dyn_main_islands %>%
-  mutate(
-    share_forest2000 = forest2000_ha / total_ha
-  )
-
-# baseline 森林率の分布確認（任意）
+```{r check share_forest2000 dist}
+# baseline 森林率の分布確認
 summary(reg_dyn_main_islands$share_forest2000)
 ```
 
@@ -755,18 +909,15 @@ reg_dyn_forest_median %>%
 
 ```
 
+これで、2000年次の森林率が中央値以上の自治体のみに、はじめのデータを絞れた
+
+
 ```{r robustness sample with frontier}
 
 # 4. frontier 条件も同時に満たすロバストネス・サンプル
 #    - main spec: reg_dyn_frontier_loose の中で median 以上だけ
 #    - strict spec: reg_dyn_frontier_strict の中で median 以上だけ
 
-
-# まず reg_dyn_frontier に baseline 森林率を持たせておく
-reg_dyn_frontier <- reg_dyn_frontier %>%
-  mutate(
-    share_forest2000 = forest2000_ha / total_ha
-  )
 
 # (a) main spec (loose frontier + median 以上の森林率)
 reg_dyn_frontier_loose_med <- reg_dyn_frontier %>%
@@ -796,6 +947,18 @@ reg_dyn_frontier_loose_med %>%
 reg_dyn_frontier_strict_med %>%
   count(adm1_name, sort = TRUE)
 ```
+
+reg_dyn_frontier_loose_med <- reg_dyn_frontier %>%
+  filter(
+    is_frontier_loose,
+    share_forest2000 >= med_share_forest2000
+  )
+
+reg_dyn_frontier_strict_med <- reg_dyn_frontier %>%
+  filter(
+    is_frontier_strict,
+    share_forest2000 >= med_share_forest2000
+  )
 
 ## data = reg_dyn_frontier_loose
 reg_dyn_frontier_loose は、
@@ -851,6 +1014,7 @@ summary(dyn_iv, stage = 1)
 summary(dyn_iv, stage = 2)
 ```
 
+
 # Robustness Check
 data = reg_dyn_frontier_strict
 → main forest islands ＋ baseline 森林率 ≥ 2% ＋ frontier（厳しめ）のサンプル
@@ -858,7 +1022,9 @@ data = reg_dyn_frontier_strict
 data = reg_dyn_frontier_loose_med
 → main forest islands ＋ baseline 森林率 ≥ 2% ＋ frontier（厳しめ）のサンプル
 
+
 ## data = reg_dyn_frontier_strict
+### 2sls strict
 
 ```{r 2SLS_first_stage_lag robust 1st, echo=FALSE}
 fs_ln_alerts_l1 <- feols(
@@ -883,6 +1049,7 @@ iv_defor_l1 <- feols(
 summary(iv_defor_l1)
 ```
 
+### dyn_2sls strict
 
 ```{r dyn_2sls first robust, echo=FALSE}
 dyn_iv <- feols(
@@ -903,6 +1070,7 @@ summary(dyn_iv, stage = 2)
 
 
 ## data = reg_dyn_frontier_loose_med
+### 2sls loose and med cut
 
 ```{r 2SLS_first_stage_lag loose 1st, echo=FALSE}
 fs_ln_alerts_l1 <- feols(
@@ -927,6 +1095,7 @@ iv_defor_l1 <- feols(
 summary(iv_defor_l1)
 ```
 
+### dyn_2sls loose and med cut
 
 ```{r dyn_2sls first loose 1st, echo=FALSE}
 dyn_iv <- feols(
@@ -946,6 +1115,6 @@ summary(dyn_iv, stage = 2)
 ```
 
 
-
+reg_dyn_frontier_loose_med が最もAdj. R2が高い
 
 

@@ -1,0 +1,52 @@
+# scripts/40_models/42_iv_lag1_main.R
+
+
+# ---- paths ----
+proj_root <- rprojroot::find_rstudio_root_file()
+
+
+model_dir <- file.path(proj_root, "outputs", "models")
+model_rds <- file.path(model_dir, "model_iv_lag1_main.rds")
+dir.create(model_dir, recursive = TRUE, showWarnings = FALSE)
+
+
+
+# ---- estimate (first stage, lag1) ----
+fs_ln_alerts_l1 <- feols(
+  ln_alerts_l1 ~ cloud_share_l1 + chirps_mm + burned_ha |
+    adm2_code + year,
+  data    = reg_dyn_frontier_loose,
+  cluster = ~adm2_code
+)
+
+# ---- estimate (2SLS, lag1) ----
+iv_defor_l1 <- feols(
+  defor_rate ~ chirps_mm + burned_ha |
+    adm2_code + year |
+    ln_alerts_l1 ~ cloud_share_l1,
+  data    = reg_dyn_frontier_loose,
+  cluster = ~adm2_code
+)
+
+# ---- save ----
+saveRDS(
+  list(
+    fs_ln_alerts_l1 = fs_ln_alerts_l1,
+    iv_defor_l1     = iv_defor_l1,
+    meta = list(
+      reg_path   = reg_path,
+      created_at = Sys.time()
+    )
+  ),
+  model_rds
+)
+
+# ---- console check ----
+cat("Saved model RDS:", model_rds, "\n")
+cat("Input parquet:", reg_path, "\n\n")
+
+cat("First stage (lag1) summary:\n")
+print(summary(fs_ln_alerts_l1))
+
+cat("\nSecond stage (2SLS lag1) summary:\n")
+print(summary(iv_defor_l1))

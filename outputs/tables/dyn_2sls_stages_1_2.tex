@@ -1,0 +1,34 @@
+\begingroup
+\centering
+\begin{tabular}{lcc}
+   \tabularnewline \midrule \midrule
+   Dependent Variables:    & ln\_alerts\_l1               & defor\_rate\\   
+   Model:                  & (1)                          & (2)\\  
+   \midrule
+   \emph{Variables}\\
+   cloud\_share\_l1        & -2.326$^{***}$               &   \\   
+                           & (0.6551)                     &   \\   
+   defor\_rate\_l1         & 18.23$^{**}$                 & -0.0401\\   
+                           & (8.478)                      & (0.0478)\\   
+   chirps\_mm              & $5.98\times 10^{-5}$         & $-2.21\times 10^{-6}$$^{**}$\\    
+                           & ($8.88\times 10^{-5}$)       & ($1\times 10^{-6}$)\\    
+   burned\_ha              & $8.08\times 10^{-6}$$^{**}$  & $-3.84\times 10^{-9}$\\    
+                           & ($4.1\times 10^{-6}$)        & ($1\times 10^{-6}$)\\    
+   ln\_alerts\_l1          &                              & 0.0009\\   
+                           &                              & (0.0010)\\   
+   \midrule
+   \emph{Fixed-effects}\\
+   adm2\_code              & Yes                          & Yes\\  
+   year                    & Yes                          & Yes\\  
+   \midrule
+   \emph{Fit statistics}\\
+   Observations            & 1,870                        & 1,870\\  
+   R$^2$                   & 0.96494                      & 0.79685\\  
+   Within R$^2$            & 0.02282                      & 0.01995\\  
+   F-test (IV only)        & 22.212                       & 0.84465\\  
+   Wald (IV only), p-value & 0.00039                      & 0.38755\\  
+   \midrule \midrule
+   \multicolumn{3}{l}{\emph{Clustered (adm2\_code) standard-errors in parentheses}}\\
+   \multicolumn{3}{l}{\emph{Signif. Codes: ***: 0.01, **: 0.05, *: 0.1}}\\
+\end{tabular}
+\par\endgroup
