@@ -500,27 +500,13 @@ data = reg_dyn_frontier_loose_med
 ### 2sls strict
 
 ```{r 2SLS_first_stage_lag robust 1st, echo=FALSE}
-fs_ln_alerts_l1 <- feols(
-  ln_alerts_l1 ~ cloud_share_l1 + chirps_mm + burned_ha |
-    adm2_code + year,
-  data = reg_dyn_frontier_strict,
-  cluster = ~adm2_code
-)
-
 summary(fs_ln_alerts_l1)
 ```
 
 ```{r 2SLS_second_stage_lag robust 2nd, echo=FALSE}
-iv_defor_l1 <- feols(
-  defor_rate ~ chirps_mm + burned_ha |      # 外生コントロール（当期）
-    adm2_code + year |                      # 固定効果
-    ln_alerts_l1 ~ cloud_share_l1,          # 内生 ~ IV（ともに1期ラグ）
-  data = reg_dyn_frontier_strict,
-  cluster = ~adm2_code
-)
-
 summary(iv_defor_l1)
 ```
+
 
 ### dyn_2sls strict
 
@@ -546,27 +532,13 @@ summary(dyn_iv, stage = 2)
 ### 2sls loose and med cut
 
 ```{r 2SLS_first_stage_lag loose 1st, echo=FALSE}
-fs_ln_alerts_l1 <- feols(
-  ln_alerts_l1 ~ cloud_share_l1 + chirps_mm + burned_ha |
-    adm2_code + year,
-  data = reg_dyn_frontier_loose_med,
-  cluster = ~adm2_code
-)
-
 summary(fs_ln_alerts_l1)
 ```
 
 ```{r 2SLS_second_stage_lag loose 2nd, echo=FALSE}
-iv_defor_l1 <- feols(
-  defor_rate ~ chirps_mm + burned_ha |      # 外生コントロール（当期）
-    adm2_code + year |                      # 固定効果
-    ln_alerts_l1 ~ cloud_share_l1,          # 内生 ~ IV（ともに1期ラグ）
-  data = reg_dyn_frontier_loose_med,
-  cluster = ~adm2_code
-)
-
 summary(iv_defor_l1)
 ```
+
 
 ### dyn_2sls loose and med cut
 

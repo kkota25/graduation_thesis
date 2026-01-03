@@ -47,6 +47,20 @@ assert_has_cols <- function(df, cols, df_name = "data") {
   invisible(TRUE)
 }
 
+# helper: assert lag columns exist (for dynamic specs)
+assert_has_lags <- function(df, df_name = "data") {
+  lag_cols <- c("defor_rate_l1", "ln_alerts_l1", "cloud_share_l1")
+  assert_has_cols(df, lag_cols, df_name)
+  invisible(TRUE)
+}
+
+# helper: assert lag columns exist (for lag-1 2SLS)
+assert_has_lag_iv <- function(df, df_name = "data") {
+  lag_iv_cols <- c("ln_alerts_l1", "cloud_share_l1")
+  assert_has_cols(df, lag_iv_cols, df_name)
+  invisible(TRUE)
+}
+
 # --------------------------------------------------
 # 1) reg_dt: select variables + generate logs
 # --------------------------------------------------
@@ -121,6 +135,8 @@ reg_dyn <- reg_dt %>%
     !is.na(cloud_share_l1)
   )
 
+assert_has_lags(reg_dyn, "reg_dyn")
+
 out_reg_dyn <- file.path(dir_proc, "reg_dyn.parquet")
 write_parquet_safely(reg_dyn, out_reg_dyn)
 message("Saved: ", out_reg_dyn, "  (n=", nrow(reg_dyn), ")")
@@ -128,6 +144,7 @@ message("Saved: ", out_reg_dyn, "  (n=", nrow(reg_dyn), ")")
 # reg_dyn_nz: drop ln_alerts missing / zero (as in your Rmd)
 reg_dyn_nz <- reg_dyn %>%
   filter(!is.na(ln_alerts), ln_alerts != 0)
+assert_has_lags(reg_dyn_nz, "reg_dyn_nz")
 
 out_reg_dyn_nz <- file.path(dir_proc, "reg_dyn_nz.parquet")
 write_parquet_safely(reg_dyn_nz, out_reg_dyn_nz)
@@ -146,6 +163,8 @@ reg_lag <- reg_dt %>%
   ) %>%
   ungroup() %>%
   filter(!is.na(ln_alerts_l1), !is.na(cloud_share_l1))
+
+assert_has_lag_iv(reg_lag, "reg_lag")
 
 out_reg_lag <- file.path(dir_proc, "reg_lag.parquet")
 write_parquet_safely(reg_lag, out_reg_lag)
@@ -179,6 +198,8 @@ drop_adm1 <- c(
 reg_dyn_main_islands <- reg_dyn %>%
   filter(!adm1_name %in% drop_adm1)
 
+assert_has_lags(reg_dyn_main_islands, "reg_dyn_main_islands")
+
 out_main_islands <- file.path(dir_proc, "reg_dyn_main_islands.parquet")
 write_parquet_safely(reg_dyn_main_islands, out_main_islands)
 message("Saved: ", out_main_islands, "  (n=", nrow(reg_dyn_main_islands), ")")
@@ -195,6 +216,8 @@ reg_dyn_main_islands <- reg_dyn_main_islands %>%
 reg_dyn_forest02 <- reg_dyn_main_islands %>%
   filter(share_forest2000 >= 0.02)
 
+assert_has_lags(reg_dyn_forest02, "reg_dyn_forest02")
+
 out_forest02 <- file.path(dir_proc, "reg_dyn_forest02.parquet")
 write_parquet_safely(reg_dyn_forest02, out_forest02)
 message("Saved: ", out_forest02, "  (n=", nrow(reg_dyn_forest02), ")")
@@ -204,6 +227,8 @@ med_share_forest2000 <- median(reg_dyn_main_islands$share_forest2000, na.rm = TR
 
 reg_dyn_forest_median <- reg_dyn_main_islands %>%
   filter(share_forest2000 >= med_share_forest2000)
+
+assert_has_lags(reg_dyn_forest_median, "reg_dyn_forest_median")
 
 out_forest_median <- file.path(dir_proc, "reg_dyn_forest_median.parquet")
 write_parquet_safely(reg_dyn_forest_median, out_forest_median)
@@ -243,8 +268,13 @@ reg_dyn_frontier <- reg_dyn_forest02 %>%
     by = "adm2_code"
   )
 
+assert_has_lags(reg_dyn_frontier, "reg_dyn_frontier")
+
 reg_dyn_frontier_loose <- reg_dyn_frontier %>% filter(is_frontier_loose)
 reg_dyn_frontier_strict <- reg_dyn_frontier %>% filter(is_frontier_strict)
+
+assert_has_lags(reg_dyn_frontier_loose,  "reg_dyn_frontier_loose")
+assert_has_lags(reg_dyn_frontier_strict, "reg_dyn_frontier_strict")
 
 out_frontier_loose  <- file.path(dir_proc, "reg_dyn_frontier_loose.parquet")
 out_frontier_strict <- file.path(dir_proc, "reg_dyn_frontier_strict.parquet")
@@ -259,6 +289,9 @@ reg_dyn_frontier_loose_med <- reg_dyn_frontier %>%
 
 reg_dyn_frontier_strict_med <- reg_dyn_frontier %>%
   filter(is_frontier_strict, share_forest2000 >= med_share_forest2000)
+
+assert_has_lags(reg_dyn_frontier_loose_med,  "reg_dyn_frontier_loose_med")
+assert_has_lags(reg_dyn_frontier_strict_med, "reg_dyn_frontier_strict_med")
 
 out_frontier_loose_med  <- file.path(dir_proc, "reg_dyn_frontier_loose_med.parquet")
 out_frontier_strict_med <- file.path(dir_proc, "reg_dyn_frontier_strict_med.parquet")
