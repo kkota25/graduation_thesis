@@ -1,0 +1,171 @@
+% appendix.tex
+% ============================================================
+% Appendix: Additional Regression Results & Supplementary Figures
+% ============================================================
+
+\clearpage
+\appendix
+
+% ------------------------------------------------------------
+% A1, A2... / B1, B2... の番号付け（chngcntr が必要）
+% ------------------------------------------------------------
+\counterwithin{table}{section}
+\counterwithin{figure}{section}
+\renewcommand{\thetable}{\Alph{section}\arabic{table}}
+\renewcommand{\thefigure}{\Alph{section}\arabic{figure}}
+
+% ------------------------------------------------------------
+% Overleaf 側の配置揺れ対策：
+%  - outputs/tables/ か tables/ のどちらでも読む
+%  - outputs/figures/ か figures/ のどちらでも読む
+% ------------------------------------------------------------
+% \newcommand{\InputTable}[1]{%
+%   \IfFileExists{outputs/tables/#1}{\input{outputs/tables/#1}}{%
+%     \IfFileExists{tables/#1}{\input{tables/#1}}{%
+%       \textbf{[Missing table file: #1]}%
+%     }%
+%   }%
+% }
+
+% \newcommand{\IncludeFig}[2][]{%
+%   \IfFileExists{outputs/figures/#2}{\includegraphics[#1]{outputs/figures/#2}}{%
+%     \IfFileExists{figures/#2}{\includegraphics[#1]{figures/#2}}{%
+%       \fbox{\textbf{Missing figure: #2}}%
+%     }%
+%   }%
+% }
+
+% ============================================================
+\section{Additional Regression Results}
+% ============================================================
+
+\subsection{Baseline and IV Specifications}
+
+\captionof{table}{Baseline FE-OLS}
+\label{tab:A1_baseline}
+\input{tables/table_baseline_feols.tex}
+
+
+
+\caption{table}{2SLS (No Lag)}
+\label{tab:A2_iv_nolag}
+\input{tables/table_iv_nolag.tex}
+
+
+
+\caption{table}{2SLS (Lag 1)}
+\label{tab:A3_iv_lag1}
+\input{tables/table_iv_lag1.tex}
+
+
+
+\caption{sidewaystable}{Dynamic 2SLS}
+\label{tab:A4_dyn_2sls}
+\input{tables/table_dyn_2sls.tex}
+
+
+\subsection{Robustness and Subsamples}
+
+
+\caption{table}{2SLS (Lag 1) --- Main Sample}
+\label{tab:A5_iv_lag1_main}
+\input{tables/52_table_iv_lag1_main.tex}
+
+
+
+\caption{sidewaystable}{Dynamic 2SLS --- Main Sample}
+\label{tab:A6_dyn_2sls_main}
+\input{tables/53_table_dyn_2sls_main.tex}
+
+
+
+\caption{table}{2SLS (Lag 1) --- Frontier (Strict)}
+\label{tab:A7_iv_lag1_frontier_strict}
+\input{tables/54_table_iv_lag1_frontier_strict.tex}
+
+
+
+\caption{sidewaystable}{Dynamic 2SLS --- Frontier (Strict)}
+\label{tab:A8_dyn_2sls_frontier_strict}
+\input{tables/55_dyn_2sls_frontier_strict.tex}
+
+
+
+\caption{sidewaystable}{Dynamic 2SLS --- Frontier (Loose, Forest Share $\ge$ Median)}
+\label{tab:A9_dyn_2sls_frontier_loose_med}
+\input{tables/56_dyn_2sls_frontier_loose_med.tex}
+
+
+% ------------------------------------------------------------
+% Descriptive table（注意）
+% table1_descriptive.tex は現在エラーでコンパイル停止しているため、
+% いったんコメントアウト推奨。
+% （後でR側で再生成するか、PDF化して \includepdf で貼る）
+% ------------------------------------------------------------
+% \begin{sidewaystable}[p]\centering
+%   \caption{Descriptive Statistics}
+%   \label{tab:A10_desc}
+%   \InputTable{table1_descriptive.tex}
+% \end{sidewaystable}
+
+\clearpage
+% ============================================================
+\section{Supplementary Figures}
+% ============================================================
+
+% ここは「実際に存在するファイル名」に合わせて差し替えてください。
+% 例：choropleth / hist / scatter の出力名は 60_figures 系スクリプトに依存。
+
+\subsection{choropleth}
+
+\begin{figure}[!htbp]\centering
+  \includegraphics[width=\textwidth]{figures/choropleth/alerts_intensity_adm2_2019_2024.png}
+  \caption{Integrated Alerts Intensity (ADM2, 2019--2024)}
+  \label{fig:alerts_map}
+\end{figure}
+
+\begin{figure}[!htbp]\centering
+  \includegraphics[width=\textwidth]{figures/choropleth/defor_intensity_adm2_2019_2024.png}
+  \caption{Deforestation Intensity (ADM2, 2019--2024)}
+  \label{fig:defor_map}
+\end{figure}
+
+
+\subsection{Histograms}
+\begin{figure}[!htbp]\centering
+  \includegraphics[width=\textwidth]{figures/hist/ha_alerts_hist.png}
+  \caption{Integrated Alerts Intensity}
+  \label{fig:alerts_hist}
+\end{figure}
+
+\begin{figure}[!htbp]\centering
+  \includegraphics[width=\textwidth]{figures/hist/ln_alerts_hist.png}
+  \caption{Integrated Alerts Intensity}
+  \label{fig:alerts_hist_log}
+\end{figure}
+
+\begin{figure}[!htbp]\centering
+  \includegraphics[width=\textwidth]{figures/hist/burned_ha_hist.png}
+  \caption{Burned Area}
+  \label{fig:burned_area_hist}
+\end{figure}
+
+\begin{figure}[!htbp]\centering
+  \includegraphics[width=\textwidth]{figures/hist/ln_burned_hist.png}
+  \caption{Burned Area}
+  \label{fig:burned_hist_log}
+\end{figure}
+
+\begin{figure}[!htbp]\centering
+  \includegraphics[width=\textwidth]{figures/hist/ln_alerts_hist.png}
+  \caption{Integrated Alerts Intensity}
+  \label{fig:alerts_hist_log}
+\end{figure}
+
+\subsection{Scatterplots}
+\begin{figure}[!htbp]\centering
+  \includegraphics[width=\textwidth]{figures/scatter/03_cloud_share_vs_ln_alerts.png}
+  \caption{Cloud Share vs ln Alerts}
+  \label{fig:cloud_share_alerts}
+\end{figure}
+
