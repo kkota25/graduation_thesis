@@ -13,6 +13,7 @@ library(knitr)
 library(kableExtra)
 
 library(rprojroot)
+library(viridis)
 
 
 source("scripts/10_clean/11_clean_alerts.R")
@@ -48,8 +49,7 @@ source("scripts/50_tables/54_table_iv_lag1_frontier_strict.R")
 source("scripts/50_tables/55_table_dyn_2sls_frontier_strict.R")
 source("scripts/50_tables/56_table_dyn_2sls_frontier_loose_med.R")
 
+source("scripts/60_figures/60_histograms.R")
+source("scripts/60_figures/61_choropleth.R")
+source("scripts/60_figures/62_scatterplots.R")
 
-
-source("scripts/21_choropleth_map.Rmd")
-source("scripts/22_histograms.R")
-source("scripts/23_scatterplots.R")
